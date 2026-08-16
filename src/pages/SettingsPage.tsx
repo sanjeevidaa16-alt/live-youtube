@@ -13,7 +13,6 @@ import {
 } from 'lucide-react';
 import { SystemSettings, StreamQuality, StreamBitrate, StreamFps } from '../types.js';
 import { api } from '../services/api.js';
-import { StorageSettingsCard } from '../components/StorageSettingsCard.js';
 import { DatabaseSettingsCard } from '../components/DatabaseSettingsCard.js';
 
 export const SettingsPage: React.FC = () => {
@@ -296,9 +295,6 @@ export const SettingsPage: React.FC = () => {
 
       {/* Supabase Primary Database Configuration */}
       <DatabaseSettingsCard onSaved={() => setSaveSuccess('Supabase PostgreSQL database configuration updated.')} />
-
-      {/* Cloudflare R2 Permanent Video Object Storage */}
-      <StorageSettingsCard onSaved={() => setSaveSuccess('Cloudflare R2 storage settings updated.')} />
 
       {/* Security & Password Form */}
       <form onSubmit={handleChangePassword} className="p-6 sm:p-8 rounded-3xl bg-[#111622] border border-zinc-800 shadow-xl space-y-6">

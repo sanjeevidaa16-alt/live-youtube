@@ -180,46 +180,6 @@ export interface StreamSessionHistory {
   rtmpUrl: string;
 }
 
-export interface R2StorageDiagnostics {
-  credentialsLoaded?: boolean;
-  endpointReachable?: boolean;
-  bucketAccessible?: boolean;
-  writePermission?: boolean;
-  readPermission?: boolean;
-  deletePermission?: boolean;
-}
-
-export interface R2StorageConfig {
-  storageProvider: 'cloudflare_r2';
-  accountId?: string;
-  accessKeyId?: string;
-  secretAccessKey?: string; // Masked on client side
-  bucketName?: string;
-  publicUrl?: string; // Optional custom domain / R2 public URL
-  maxStorageGb?: number;
-  maxVideoSizeGb?: number;
-  lastTestedAt?: string;
-  lastTestStatus?: 'connected' | 'error' | 'untested';
-  lastTestMessage?: string;
-  diagnostics?: R2StorageDiagnostics;
-  storageUsedBytes?: number;
-  objectCount?: number;
-}
-
-export interface StorageTestResult {
-  success: boolean;
-  connected: boolean;
-  storageProvider: 'cloudflare_r2';
-  accountId?: string;
-  bucketName?: string;
-  message?: string;
-  error?: string;
-  diagnostics?: R2StorageDiagnostics;
-  storageUsedBytes?: number;
-  objectCount?: number;
-  testedAt: string;
-}
-
 export interface DatabaseDiagnostics {
   urlConfigured: boolean;
   anonKeyConfigured: boolean;
@@ -279,7 +239,6 @@ export interface SystemSettings {
   allowedExtensions: string[];
   autoRestartOnServerBoot: boolean;
   maxConcurrentStreams?: number;
-  r2?: R2StorageConfig;
   database?: DatabaseConfig;
 }
 

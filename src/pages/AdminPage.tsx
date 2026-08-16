@@ -20,7 +20,6 @@ import {
   Loader2,
 } from 'lucide-react';
 
-import { StorageSettingsCard } from '../components/StorageSettingsCard.js';
 import { DatabaseSettingsCard } from '../components/DatabaseSettingsCard.js';
 
 export const AdminPage: React.FC = () => {
@@ -299,9 +298,6 @@ export const AdminPage: React.FC = () => {
 
       {/* Supabase Primary Relational Database */}
       <DatabaseSettingsCard onSaved={fetchAdminData} />
-
-      {/* Cloudflare R2 Video Object Storage */}
-      <StorageSettingsCard onSaved={fetchAdminData} />
 
     </div>
   );

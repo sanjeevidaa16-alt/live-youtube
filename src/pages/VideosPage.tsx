@@ -313,12 +313,6 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
                       <span>•</span>
                       <span>{new Date(video.createdAt || (video as any).uploadedAt || Date.now()).toLocaleDateString()}</span>
                     </div>
-                    {video.r2ObjectKey && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">
-                        <Cloud className="w-2.5 h-2.5" />
-                        R2 Storage
-                      </span>
-                    )}
                   </div>
                 </div>
 

@@ -314,7 +314,9 @@ class SupabaseServiceClass {
 
       const { data, count, error } = await query;
       if (error) {
-        console.warn('[SupabaseService] getVideos query error:', error.message);
+        if (!error.message.includes('Could not find the table') && !error.message.includes('does not exist')) {
+          console.warn('[SupabaseService] getVideos query error:', error.message);
+        }
         return null;
       }
 
@@ -467,7 +469,9 @@ class SupabaseServiceClass {
         .order('updated_at', { ascending: false });
 
       if (plErr) {
-        console.warn('[SupabaseService] getPlaylists error:', plErr.message);
+        if (!plErr.message.includes('Could not find the table') && !plErr.message.includes('does not exist')) {
+          console.warn('[SupabaseService] getPlaylists error:', plErr.message);
+        }
         return null;
       }
 

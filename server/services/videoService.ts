@@ -145,13 +145,17 @@ export class VideoService {
     originalName: string,
     storedFilename: string,
     tempFilePath: string,
-    fileSize: number,
-    r2ObjectKey?: string,
-    r2Bucket?: string
+    fileSize: number
   ): Promise<VideoItem> {
     const videoId = path.parse(storedFilename).name;
-    const metadata = await this.probeVideo(tempFilePath);
-    const thumbnailUrl = (await this.generateThumbnail(tempFilePath, videoId, metadata.duration)) || '';
+    const permanentPath = path.join(UPLOAD_DIR, storedFilename);
+
+    if (tempFilePath !== permanentPath) {
+      fs.copyFileSync(tempFilePath, permanentPath);
+    }
+
+    const metadata = await this.probeVideo(permanentPath);
+    const thumbnailUrl = (await this.generateThumbnail(permanentPath, videoId, metadata.duration)) || '';
 
     const resolution = metadata.width > 0 && metadata.height > 0 ? `${metadata.width}x${metadata.height}` : '1080p';
 
@@ -160,7 +164,7 @@ export class VideoService {
       originalName,
       storedName: storedFilename,
       filename: storedFilename,
-      path: tempFilePath, // In Cloudflare R2 mode, permanent video is in R2
+      path: permanentPath,
       thumbnailUrl,
       size: fileSize,
       duration: metadata.duration,
@@ -173,10 +177,8 @@ export class VideoService {
       audioCodec: metadata.audioCodec,
       hasAudio: metadata.hasAudio,
       bitrate: metadata.bitrate,
-      source: r2ObjectKey ? 'r2' : 'upload',
-      r2ObjectKey,
-      r2Bucket,
-      storageProvider: r2ObjectKey ? 'cloudflare_r2' : 'vps',
+      source: 'upload',
+      storageProvider: 'vps',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -188,7 +190,7 @@ export class VideoService {
     if (SupabaseService.isConfigured()) {
       try {
         await SupabaseService.insertVideo(videoItem);
-        await SupabaseService.logEvent(undefined, 'UPLOAD', `Video "${originalName}" uploaded to Cloudflare R2 and registered in Supabase.`);
+        await SupabaseService.logEvent(undefined, 'UPLOAD', `Video "${originalName}" uploaded to local storage and registered in Supabase.`);
       } catch (sbErr: any) {
         console.warn('[VideoService] Supabase insert warning:', sbErr.message);
       }

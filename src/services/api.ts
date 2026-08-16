@@ -442,16 +442,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data || {}),
     }),
-  testStorageConnection: (data?: Partial<import('../types.js').R2StorageConfig>) =>
-    request<import('../types.js').StorageTestResult>('/api/settings/storage/test', {
-      method: 'POST',
-      body: JSON.stringify(data || {}),
-    }),
-  saveStorageSettings: (data: Partial<import('../types.js').R2StorageConfig>) =>
-    request<{ success: boolean; r2: import('../types.js').R2StorageConfig; message: string }>('/api/settings/storage', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
+
 
   // System
   getSystemStatus: () => request<{ status: SystemStatus }>('/api/system/status'),

@@ -25,7 +25,6 @@ import systemRoutes from './server/routes/systemRoutes.js';
 import { UPLOAD_DIR } from './server/database/db.js';
 import { streamingEngine } from './server/services/streamingEngine.js';
 import { SupabaseService } from './server/services/supabaseService.js';
-import { R2Service } from './server/services/r2Service.js';
 
 async function startServer() {
   const app = express();
@@ -42,7 +41,6 @@ async function startServer() {
   app.get('/api/health', async (_req, res) => {
     const diagnostics = await streamingEngine.runDiagnostics();
     const isSupabaseConfigured = SupabaseService.isConfigured();
-    const isR2Configured = R2Service.isConfigured();
 
     res.json({
       server: 'OK',
@@ -53,11 +51,6 @@ async function startServer() {
         provider: 'supabase_postgres',
         configured: isSupabaseConfigured,
         status: isSupabaseConfigured ? 'CONNECTED' : 'LOCAL_CACHE_FALLBACK',
-      },
-      storage: {
-        provider: 'cloudflare_r2',
-        configured: isR2Configured,
-        status: isR2Configured ? 'READY' : 'NOT_CONFIGURED',
       },
       status: 'ok',
       service: 'CastLoop 24/7 RTMP Streamer',

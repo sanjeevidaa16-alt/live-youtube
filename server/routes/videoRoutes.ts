@@ -6,7 +6,6 @@ import crypto from 'crypto';
 import { Readable } from 'stream';
 import { db, UPLOAD_DIR } from '../database/db.js';
 import { VideoService } from '../services/videoService.js';
-import { R2Service } from '../services/r2Service.js';
 import { SupabaseService } from '../services/supabaseService.js';
 import { requireAuth } from '../middleware/auth.js';
 
@@ -194,32 +193,10 @@ async function handleVideoStream(req: Request, res: Response) {
     return;
   }
 
-  // 1. If video is stored in Cloudflare R2 Object Storage
-  if (video.r2ObjectKey) {
-    try {
-      const { status, headers, stream } = await R2Service.streamVideo(
-        video.r2ObjectKey,
-        req.headers.range
-      );
+  const filePath = video.path || path.join(UPLOAD_DIR, video.storedName);
 
-      res.writeHead(status, headers);
-      pipeWebStream(stream, res);
-      return;
-    } catch (err: any) {
-      console.warn(`[VideoStream] Cloudflare R2 stream notice for ${video.id}:`, err.message);
-      // Fallback to local file if available
-      if (video.path && fs.existsSync(video.path)) {
-        // stream local file below
-      } else {
-        res.status(502).json({ error: `Unable to stream video from Cloudflare R2: ${err.message}` });
-        return;
-      }
-    }
-  }
-
-  // 2. Stream local physical file (for local uploaded samples or test videos)
-  if (video.path && fs.existsSync(video.path)) {
-    const stat = fs.statSync(video.path);
+  if (filePath && fs.existsSync(filePath)) {
+    const stat = fs.statSync(filePath);
     const fileSize = stat.size;
     const range = req.headers.range;
 
@@ -228,7 +205,7 @@ async function handleVideoStream(req: Request, res: Response) {
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
       const chunksize = end - start + 1;
-      const file = fs.createReadStream(video.path, { start, end });
+      const file = fs.createReadStream(filePath, { start, end });
       const head = {
         'Content-Range': `bytes ${start}-${end}/${fileSize}`,
         'Accept-Ranges': 'bytes',
@@ -244,12 +221,12 @@ async function handleVideoStream(req: Request, res: Response) {
         'Accept-Ranges': 'bytes',
       };
       res.writeHead(200, head);
-      fs.createReadStream(video.path).pipe(res);
+      fs.createReadStream(filePath).pipe(res);
     }
     return;
   }
 
-  res.status(404).json({ error: 'Video file not found in Cloudflare R2 or local storage.' });
+  res.status(404).json({ error: 'Video file not found on server disk.' });
 }
 
 // GET /api/videos/:id/file - Stream raw video for preview in browser & FFmpeg
@@ -297,16 +274,6 @@ router.post('/upload/init', requireAuth, async (req: Request, res: Response) => 
 
   if (!filename || !filename.trim()) {
     res.status(400).json({ error: 'Filename is required.' });
-    return;
-  }
-
-  // Pre-validate Cloudflare R2 storage configuration before starting multi-gigabyte upload
-  try {
-    await R2Service.validateBucketAccessible();
-  } catch (r2Err: any) {
-    res.status(400).json({
-      error: r2Err.message || 'Cloudflare R2 storage is not configured or bucket is not accessible. Please configure your R2 credentials in Storage Settings.',
-    });
     return;
   }
 
@@ -427,18 +394,7 @@ router.post('/upload/complete', requireAuth, async (req: Request, res: Response)
     }
   }
 
-  // 1. Verify Cloudflare R2 bucket is accessible before processing
-  try {
-    await R2Service.validateBucketAccessible();
-  } catch (r2Err: any) {
-    try {
-      fs.rmSync(sessionDir, { recursive: true, force: true });
-    } catch (e) {}
-    res.status(400).json({
-      error: r2Err.message || 'Configured Cloudflare R2 bucket is not accessible. Please check Storage Settings.',
-    });
-    return;
-  }
+
 
   const ext = path.extname(filename || 'video.mp4').toLowerCase() || '.mp4';
   const safeId = crypto.randomUUID();
@@ -474,24 +430,15 @@ router.post('/upload/complete', requireAuth, async (req: Request, res: Response)
     const stat = fs.statSync(tempMergedPath);
     const originalName = title?.trim() || filename || storedName;
 
-    // 3. Upload merged video stream to Cloudflare R2
-    const r2Result = await R2Service.uploadVideo(
-      tempMergedPath,
-      originalName,
-      'video/mp4'
-    );
-
-    // 4. Extract metadata & generate thumbnail from temp file, then register in database
+    // 3. Process new upload (store permanently in UPLOAD_DIR, extract metadata, generate thumbnail)
     const videoItem = await VideoService.processNewUpload(
       originalName,
       storedName,
       tempMergedPath,
-      stat.size,
-      r2Result.r2ObjectKey,
-      r2Result.r2Bucket
+      stat.size
     );
 
-    // 5. Delete temporary VPS video file immediately! Permanent video is stored only in Cloudflare R2
+    // 4. Delete temporary VPS video file if separate from permanent path
     try {
       if (fs.existsSync(tempMergedPath)) {
         fs.unlinkSync(tempMergedPath);
@@ -502,18 +449,18 @@ router.post('/upload/complete', requireAuth, async (req: Request, res: Response)
 
     res.status(201).json({
       success: true,
-      message: '✓ Upload completed and stored permanently in Cloudflare R2 Object Storage.',
+      message: '✓ Upload completed and stored permanently in local storage.',
       video: videoItem,
     });
   } catch (err: any) {
-    console.error('[VideoUploadComplete] Error during Cloudflare R2 upload or merge:', err);
+    console.error('[VideoUploadComplete] Error during upload or merge:', err);
     try {
       if (fs.existsSync(tempMergedPath)) fs.unlinkSync(tempMergedPath);
       if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
     } catch (e) {}
 
     res.status(400).json({
-      error: `Failed to upload video to Cloudflare R2: ${err.message || 'Storage error'}`,
+      error: `Failed to upload video: ${err.message || 'Storage error'}`,
     });
   }
 });
@@ -558,38 +505,19 @@ router.post('/upload', requireAuth, (req: Request, res: Response) => {
     const tempFilePath = req.file.path;
 
     try {
-      // 1. Verify Cloudflare R2 bucket is accessible
-      await R2Service.validateBucketAccessible();
-
       const originalName = req.body.title?.trim() || req.file.originalname;
 
-      // 2. Upload video stream directly to Cloudflare R2
-      const r2Result = await R2Service.uploadVideo(
-        tempFilePath,
-        originalName,
-        req.file.mimetype || 'video/mp4'
-      );
-
-      // 3. Extract metadata, generate thumbnail, and save database record
+      // Extract metadata, generate thumbnail, and save database record
       const videoItem = await VideoService.processNewUpload(
         originalName,
         req.file.filename,
         tempFilePath,
-        req.file.size,
-        r2Result.r2ObjectKey,
-        r2Result.r2Bucket
+        req.file.size
       );
-
-      // 4. Delete temporary VPS video file immediately!
-      try {
-        if (fs.existsSync(tempFilePath)) {
-          fs.unlinkSync(tempFilePath);
-        }
-      } catch (e) {}
 
       res.status(201).json({
         success: true,
-        message: '✓ Upload completed and stored permanently in Cloudflare R2 Object Storage.',
+        message: '✓ Upload completed and stored permanently in local storage.',
         video: videoItem,
       });
     } catch (processErr: any) {
@@ -603,7 +531,7 @@ router.post('/upload', requireAuth, (req: Request, res: Response) => {
       res.status(400).json({
         success: false,
         error: 'PROCESSING_ERROR',
-        message: `Cloudflare R2 upload failed: ${processErr.message || 'Storage error'}`,
+        message: `Video processing failed: ${processErr.message || 'Storage error'}`,
       });
     }
   });
@@ -626,7 +554,7 @@ router.put('/:id', requireAuth, (req, res) => {
   res.json({ success: true, video: updated });
 });
 
-// DELETE /api/videos/:id - Delete video with active stream protection and Cloudflare R2 cleanup
+// DELETE /api/videos/:id - Delete video with active stream protection and local file cleanup
 router.delete('/:id', requireAuth, async (req, res) => {
   const video = db.getVideoById(req.params.id);
   if (!video) {
@@ -648,12 +576,12 @@ router.delete('/:id', requireAuth, async (req, res) => {
     return;
   }
 
-  // 2. Delete object from Cloudflare R2 if stored in R2
-  if (video.r2ObjectKey) {
+  // 2. Delete local physical file if exists
+  if (video.path && fs.existsSync(video.path)) {
     try {
-      await R2Service.deleteVideo(video.r2ObjectKey);
+      fs.unlinkSync(video.path);
     } catch (e: any) {
-      console.warn(`[VideoRoutes] Notice deleting object from Cloudflare R2: ${e.message}`);
+      console.warn(`[VideoRoutes] Notice deleting local file: ${e.message}`);
     }
   }
 
@@ -662,7 +590,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
 
   if (SupabaseService.isConfigured()) {
     await SupabaseService.deleteVideo(req.params.id);
-    await SupabaseService.logEvent(undefined, 'DELETE', `Video "${video.originalName}" (${req.params.id}) deleted from Cloudflare R2 and Supabase.`);
+    await SupabaseService.logEvent(undefined, 'DELETE', `Video "${video.originalName}" (${req.params.id}) deleted from server and Supabase.`);
   }
 
   if (!result.success) {
@@ -677,7 +605,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
     success: true,
     deleted: true,
     videoId: req.params.id,
-    message: 'Video deleted successfully from Cloudflare R2 storage and Supabase database.',
+    message: 'Video deleted successfully from storage and Supabase database.',
   });
 });
 
