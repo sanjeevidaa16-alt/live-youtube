@@ -3,14 +3,17 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { Readable } from 'stream';
 import { db, UPLOAD_DIR } from '../database/db.js';
 import { VideoService } from '../services/videoService.js';
+import { R2Service } from '../services/r2Service.js';
+import { SupabaseService } from '../services/supabaseService.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 const CHUNKS_TEMP_DIR = path.join(UPLOAD_DIR, 'chunks_temp');
 
-// Ensure chunk directory exists
+// Ensure chunk and upload directory exists
 if (!fs.existsSync(CHUNKS_TEMP_DIR)) {
   fs.mkdirSync(CHUNKS_TEMP_DIR, { recursive: true });
 }
@@ -34,7 +37,7 @@ function cleanupStaleChunks() {
 }
 cleanupStaleChunks();
 
-// Configure Multer storage for standard uploads
+// Configure Multer temporary storage for direct multipart uploads
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
     if (!fs.existsSync(UPLOAD_DIR)) {
@@ -45,7 +48,7 @@ const storage = multer.diskStorage({
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase() || '.mp4';
     const safeId = crypto.randomUUID();
-    cb(null, `${safeId}${ext}`);
+    cb(null, `temp_upload_${safeId}${ext}`);
   },
 });
 
@@ -53,7 +56,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: {
-    fileSize: 1024 * 1024 * 1024 * 50, // 50GB cap to allow 10GB+ large video uploads
+    fileSize: 1024 * 1024 * 1024 * 50, // 50GB max
   },
   fileFilter: (_req, file, cb) => {
     const settings = db.getSettings();
@@ -69,12 +72,11 @@ const upload = multer({
   },
 });
 
-// Multer storage for chunk uploads (streams directly from socket to chunk file on disk)
+// Multer storage for chunk uploads
 const chunkStorage = multer.diskStorage({
   destination: (req, _file, cb) => {
-    const uploadId = (req.body.uploadId || req.headers['x-upload-id'] as string || '').trim();
+    const uploadId = (req.body.uploadId || (req.headers['x-upload-id'] as string) || '').trim();
     if (!uploadId || !/^[a-zA-Z0-9_-]+$/.test(uploadId)) {
-      // Fallback temp location if headers/body haven't finished parsing yet
       const fallbackDir = path.join(CHUNKS_TEMP_DIR, 'staging');
       fs.mkdirSync(fallbackDir, { recursive: true });
       return cb(null, fallbackDir);
@@ -83,8 +85,8 @@ const chunkStorage = multer.diskStorage({
     fs.mkdirSync(sessionDir, { recursive: true });
     cb(null, sessionDir);
   },
-  filename: (req, file, cb) => {
-    const chunkIndexStr = req.body.chunkIndex || req.headers['x-chunk-index'] as string || '0';
+  filename: (req, _file, cb) => {
+    const chunkIndexStr = req.body.chunkIndex || (req.headers['x-chunk-index'] as string) || '0';
     const chunkIndex = parseInt(chunkIndexStr, 10) || 0;
     cb(null, `chunk_${String(chunkIndex).padStart(6, '0')}.part`);
   },
@@ -97,14 +99,57 @@ const chunkUpload = multer({
   },
 });
 
-// GET /api/videos - List all videos
-router.get('/', requireAuth, (_req, res) => {
-  const videos = db.getVideos();
-  res.json({ videos });
+// GET /api/videos - List all videos with search and pagination support
+router.get('/', requireAuth, async (req: Request, res: Response) => {
+  const search = req.query.search ? String(req.query.search) : undefined;
+  const page = parseInt(String(req.query.page || '1'), 10) || 1;
+  const limit = parseInt(String(req.query.limit || '50'), 10) || 50;
+  const offset = (page - 1) * limit;
+
+  // 1. If Supabase is configured, fetch from Supabase
+  if (SupabaseService.isConfigured()) {
+    const sbResult = await SupabaseService.getVideos({ search, limit, offset });
+    if (sbResult && sbResult.videos) {
+      res.json({
+        videos: sbResult.videos,
+        total: sbResult.total,
+        page,
+        limit,
+        source: 'supabase',
+      });
+      return;
+    }
+  }
+
+  // 2. Fallback to local DB cache
+  let allVideos = db.getVideos();
+  if (search && search.trim()) {
+    const s = search.trim().toLowerCase();
+    allVideos = allVideos.filter((v) => v.originalName.toLowerCase().includes(s));
+  }
+
+  const total = allVideos.length;
+  const pagedVideos = allVideos.slice(offset, offset + limit);
+
+  res.json({
+    videos: pagedVideos,
+    total,
+    page,
+    limit,
+    source: 'local',
+  });
 });
 
 // GET /api/videos/:id - Get single video info
-router.get('/:id', requireAuth, (req, res) => {
+router.get('/:id', requireAuth, async (req: Request, res: Response) => {
+  if (SupabaseService.isConfigured()) {
+    const sbVideo = await SupabaseService.getVideoById(req.params.id);
+    if (sbVideo) {
+      res.json({ video: sbVideo });
+      return;
+    }
+  }
+
   const video = db.getVideoById(req.params.id);
   if (!video) {
     res.status(404).json({ error: 'Video not found.' });
@@ -113,42 +158,105 @@ router.get('/:id', requireAuth, (req, res) => {
   res.json({ video });
 });
 
-// GET /api/videos/:id/file - Stream raw video for preview in browser
-router.get('/:id/file', (req, res) => {
+// Helper for streaming readable stream to Express Response
+function pipeWebStream(stream: any, res: Response) {
+  if (stream && typeof stream.pipe === 'function') {
+    stream.pipe(res);
+  } else if (stream && typeof (Readable as any).fromWeb === 'function') {
+    const nodeStream = (Readable as any).fromWeb(stream);
+    nodeStream.pipe(res);
+  } else if (stream && typeof stream.getReader === 'function') {
+    const reader = stream.getReader();
+    function read() {
+      reader.read().then(({ done, value }: any) => {
+        if (done) {
+          res.end();
+          return;
+        }
+        res.write(Buffer.from(value));
+        read();
+      }).catch((err: any) => {
+        console.error('[StreamProxy] Pipe error:', err);
+        res.end();
+      });
+    }
+    read();
+  } else {
+    res.end();
+  }
+}
+
+// Handler for streaming raw video for preview in browser & FFmpeg
+async function handleVideoStream(req: Request, res: Response) {
   const video = db.getVideoById(req.params.id);
-  if (!video || !fs.existsSync(video.path)) {
-    res.status(404).json({ error: 'Video file not found on disk.' });
+  if (!video) {
+    res.status(404).json({ error: 'Video not found.' });
     return;
   }
 
-  const stat = fs.statSync(video.path);
-  const fileSize = stat.size;
-  const range = req.headers.range;
+  // 1. If video is stored in Cloudflare R2 Object Storage
+  if (video.r2ObjectKey) {
+    try {
+      const { status, headers, stream } = await R2Service.streamVideo(
+        video.r2ObjectKey,
+        req.headers.range
+      );
 
-  if (range) {
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    const chunksize = end - start + 1;
-    const file = fs.createReadStream(video.path, { start, end });
-    const head = {
-      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': chunksize,
-      'Content-Type': 'video/mp4',
-    };
-    res.writeHead(206, head);
-    file.pipe(res);
-  } else {
-    const head = {
-      'Content-Length': fileSize,
-      'Content-Type': 'video/mp4',
-      'Accept-Ranges': 'bytes',
-    };
-    res.writeHead(200, head);
-    fs.createReadStream(video.path).pipe(res);
+      res.writeHead(status, headers);
+      pipeWebStream(stream, res);
+      return;
+    } catch (err: any) {
+      console.warn(`[VideoStream] Cloudflare R2 stream notice for ${video.id}:`, err.message);
+      // Fallback to local file if available
+      if (video.path && fs.existsSync(video.path)) {
+        // stream local file below
+      } else {
+        res.status(502).json({ error: `Unable to stream video from Cloudflare R2: ${err.message}` });
+        return;
+      }
+    }
   }
-});
+
+  // 2. Stream local physical file (for local uploaded samples or test videos)
+  if (video.path && fs.existsSync(video.path)) {
+    const stat = fs.statSync(video.path);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = end - start + 1;
+      const file = fs.createReadStream(video.path, { start, end });
+      const head = {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': 'video/mp4',
+      };
+      res.writeHead(206, head);
+      file.pipe(res);
+    } else {
+      const head = {
+        'Content-Length': fileSize,
+        'Content-Type': 'video/mp4',
+        'Accept-Ranges': 'bytes',
+      };
+      res.writeHead(200, head);
+      fs.createReadStream(video.path).pipe(res);
+    }
+    return;
+  }
+
+  res.status(404).json({ error: 'Video file not found in Cloudflare R2 or local storage.' });
+}
+
+// GET /api/videos/:id/file - Stream raw video for preview in browser & FFmpeg
+router.get('/:id/file', handleVideoStream);
+
+// GET /api/videos/:id/stream - Alias for video file stream
+router.get('/:id/stream', handleVideoStream);
 
 // ==========================================
 // CHUNKED UPLOAD ENDPOINTS (For large files)
@@ -184,11 +292,21 @@ router.get('/upload/status/:uploadId', requireAuth, (req: Request, res: Response
 });
 
 // POST /api/videos/upload/init - Initialize chunked upload session
-router.post('/upload/init', requireAuth, (req: Request, res: Response) => {
+router.post('/upload/init', requireAuth, async (req: Request, res: Response) => {
   const { filename, totalChunks, totalSize, fingerprint } = req.body;
 
   if (!filename || !filename.trim()) {
     res.status(400).json({ error: 'Filename is required.' });
+    return;
+  }
+
+  // Pre-validate Cloudflare R2 storage configuration before starting multi-gigabyte upload
+  try {
+    await R2Service.validateBucketAccessible();
+  } catch (r2Err: any) {
+    res.status(400).json({
+      error: r2Err.message || 'Cloudflare R2 storage is not configured or bucket is not accessible. Please configure your R2 credentials in Storage Settings.',
+    });
     return;
   }
 
@@ -203,15 +321,14 @@ router.post('/upload/init', requireAuth, (req: Request, res: Response) => {
     return;
   }
 
-  const maxBytes = (settings.maxUploadSizeMb || 25600) * 1024 * 1024;
+  const maxBytes = (settings.maxUploadSizeMb || 51200) * 1024 * 1024;
   if (totalSize && totalSize > maxBytes) {
     res.status(400).json({
-      error: `File size exceeds the configured maximum limit of ${settings.maxUploadSizeMb || 25600} MB. You can adjust this in Settings.`,
+      error: `File size exceeds the configured maximum limit of ${settings.maxUploadSizeMb || 51200} MB. You can adjust this in Settings.`,
     });
     return;
   }
 
-  // Generate deterministic uploadId if client provided a fingerprint (for auto-resuming)
   let uploadId = '';
   if (fingerprint && typeof fingerprint === 'string' && fingerprint.length > 3) {
     const hash = crypto.createHash('sha1').update(fingerprint).digest('hex').substring(0, 32);
@@ -221,85 +338,56 @@ router.post('/upload/init', requireAuth, (req: Request, res: Response) => {
   }
 
   const sessionDir = path.join(CHUNKS_TEMP_DIR, uploadId);
-  fs.mkdirSync(sessionDir, { recursive: true });
+  if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+  }
 
-  // Read any already uploaded chunks from this session (if resuming)
-  const completedChunks: number[] = [];
-  try {
-    const existingFiles = fs.readdirSync(sessionDir);
-    for (const f of existingFiles) {
-      const match = f.match(/^chunk_(\d+)\.part$/);
-      if (match) {
-        const idx = parseInt(match[1], 10);
-        const st = fs.statSync(path.join(sessionDir, f));
-        if (st.size > 0) {
-          completedChunks.push(idx);
-        }
-      }
-    }
-  } catch (e) {}
+  const metadataPath = path.join(sessionDir, 'metadata.json');
+  fs.writeFileSync(
+    metadataPath,
+    JSON.stringify({
+      uploadId,
+      filename,
+      totalChunks: parseInt(totalChunks, 10) || 1,
+      totalSize: totalSize || 0,
+      createdAt: new Date().toISOString(),
+    }),
+    'utf8'
+  );
 
-  res.status(200).json({
+  res.json({
     success: true,
     uploadId,
-    chunkSize: Math.floor(2.5 * 1024 * 1024), // 2.5MB lightweight chunks for 100% stability on proxies
-    totalChunks: parseInt(totalChunks, 10) || 1,
-    completedChunks,
+    chunkSize: 5 * 1024 * 1024,
+    message: 'Upload session initialized successfully.',
   });
 });
 
 // POST /api/videos/upload/chunk - Upload individual slice/chunk
 router.post('/upload/chunk', requireAuth, chunkUpload.single('chunk'), (req: Request, res: Response) => {
-  const uploadId = (req.body.uploadId || req.headers['x-upload-id'] as string || '').trim();
-  const chunkIndexStr = req.body.chunkIndex || req.headers['x-chunk-index'] as string;
-  const chunkIndex = parseInt(chunkIndexStr, 10);
+  const uploadId = (req.body.uploadId || (req.headers['x-upload-id'] as string) || '').trim();
+  const chunkIndex = parseInt(req.body.chunkIndex || (req.headers['x-chunk-index'] as string) || '0', 10);
 
   if (!uploadId || !/^[a-zA-Z0-9_-]+$/.test(uploadId)) {
     res.status(400).json({ error: 'Invalid or missing uploadId.' });
     return;
   }
 
-  if (isNaN(chunkIndex) || chunkIndex < 0) {
-    res.status(400).json({ error: 'Invalid or missing chunkIndex.' });
-    return;
-  }
-
   const sessionDir = path.join(CHUNKS_TEMP_DIR, uploadId);
   if (!fs.existsSync(sessionDir)) {
-    res.status(404).json({ error: 'Upload session not found or expired. Please restart the upload.' });
+    res.status(404).json({ error: 'Upload session does not exist. Please re-initiate upload.' });
     return;
   }
 
-  const chunkPath = path.join(sessionDir, `chunk_${String(chunkIndex).padStart(6, '0')}.part`);
-
-  // If already uploaded and intact, acknowledge immediately
-  if (fs.existsSync(chunkPath) && (!req.file || !req.file.buffer)) {
-    const existingStat = fs.statSync(chunkPath);
-    if (existingStat.size > 0) {
-      res.status(200).json({
-        success: true,
-        uploadId,
-        chunkIndex,
-        receivedBytes: existingStat.size,
-        alreadyExists: true,
-      });
-      return;
-    }
-  }
-
-  // Check if chunk file was written to disk by multer diskStorage
-  if (req.file && req.file.path) {
-    if (req.file.path !== chunkPath) {
-      fs.renameSync(req.file.path, chunkPath);
-    }
-  } else if (!fs.existsSync(chunkPath) || fs.statSync(chunkPath).size === 0) {
-    res.status(400).json({ error: 'Missing chunk binary payload.' });
+  const targetChunkPath = path.join(sessionDir, `chunk_${String(chunkIndex).padStart(6, '0')}.part`);
+  if (!fs.existsSync(targetChunkPath)) {
+    res.status(500).json({ error: 'Chunk save failed on server.' });
     return;
   }
 
-  const savedSize = fs.existsSync(chunkPath) ? fs.statSync(chunkPath).size : (req.file?.size || 0);
+  const savedSize = fs.statSync(targetChunkPath).size;
 
-  res.status(200).json({
+  res.json({
     success: true,
     uploadId,
     chunkIndex,
@@ -307,7 +395,7 @@ router.post('/upload/chunk', requireAuth, chunkUpload.single('chunk'), (req: Req
   });
 });
 
-// POST /api/videos/upload/complete - Merge all chunks and process video
+// POST /api/videos/upload/complete - Merge chunks, validate, upload to Cloudflare R2, and delete temp VPS file
 router.post('/upload/complete', requireAuth, async (req: Request, res: Response) => {
   const { uploadId, filename, totalChunks, title } = req.body;
 
@@ -339,15 +427,27 @@ router.post('/upload/complete', requireAuth, async (req: Request, res: Response)
     }
   }
 
-  // Create destination file
+  // 1. Verify Cloudflare R2 bucket is accessible before processing
+  try {
+    await R2Service.validateBucketAccessible();
+  } catch (r2Err: any) {
+    try {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    } catch (e) {}
+    res.status(400).json({
+      error: r2Err.message || 'Configured Cloudflare R2 bucket is not accessible. Please check Storage Settings.',
+    });
+    return;
+  }
+
   const ext = path.extname(filename || 'video.mp4').toLowerCase() || '.mp4';
   const safeId = crypto.randomUUID();
   const storedName = `${safeId}${ext}`;
-  const finalPath = path.join(UPLOAD_DIR, storedName);
+  const tempMergedPath = path.join(UPLOAD_DIR, `temp_merged_${storedName}`);
 
   try {
-    // Stream-pipe all chunks sequentially into the final file without loading full video into RAM
-    const writeStream = fs.createWriteStream(finalPath, { flags: 'w' });
+    // 2. Merge chunks sequentially into temp VPS file
+    const writeStream = fs.createWriteStream(tempMergedPath, { flags: 'w' });
 
     for (let i = 0; i < total; i++) {
       const chunkPath = path.join(sessionDir, `chunk_${String(i).padStart(6, '0')}.part`);
@@ -371,52 +471,55 @@ router.post('/upload/complete', requireAuth, async (req: Request, res: Response)
       fs.rmSync(sessionDir, { recursive: true, force: true });
     } catch (e) {}
 
-    const stat = fs.statSync(finalPath);
+    const stat = fs.statSync(tempMergedPath);
     const originalName = title?.trim() || filename || storedName;
 
-    // Analyze and process video metadata via FFprobe
+    // 3. Upload merged video stream to Cloudflare R2
+    const r2Result = await R2Service.uploadVideo(
+      tempMergedPath,
+      originalName,
+      'video/mp4'
+    );
+
+    // 4. Extract metadata & generate thumbnail from temp file, then register in database
     const videoItem = await VideoService.processNewUpload(
       originalName,
       storedName,
-      finalPath,
-      stat.size
+      tempMergedPath,
+      stat.size,
+      r2Result.r2ObjectKey,
+      r2Result.r2Bucket
     );
+
+    // 5. Delete temporary VPS video file immediately! Permanent video is stored only in Cloudflare R2
+    try {
+      if (fs.existsSync(tempMergedPath)) {
+        fs.unlinkSync(tempMergedPath);
+      }
+    } catch (delErr) {
+      console.warn(`[VideoUpload] Notice deleting temp file: ${delErr}`);
+    }
 
     res.status(201).json({
       success: true,
-      message: 'Video uploaded and processed successfully.',
+      message: '✓ Upload completed and stored permanently in Cloudflare R2 Object Storage.',
       video: videoItem,
     });
   } catch (err: any) {
-    console.error('[VideoUploadComplete] Error merging or processing video:', err);
+    console.error('[VideoUploadComplete] Error during Cloudflare R2 upload or merge:', err);
     try {
-      if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath);
+      if (fs.existsSync(tempMergedPath)) fs.unlinkSync(tempMergedPath);
       if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true });
     } catch (e) {}
 
     res.status(400).json({
-      error: `Failed to process uploaded video: ${err.message || 'Processing error'}`,
+      error: `Failed to upload video to Cloudflare R2: ${err.message || 'Storage error'}`,
     });
   }
 });
 
-// POST /api/videos/upload - Standard direct multipart upload (using FormData)
+// POST /api/videos/upload - Direct multipart upload
 router.post('/upload', requireAuth, (req: Request, res: Response) => {
-  // 1. Verify storage directory is accessible
-  if (!fs.existsSync(UPLOAD_DIR)) {
-    try {
-      fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-    } catch (dirErr: any) {
-      console.error('[VideoUpload] Storage directory error:', dirErr);
-      res.status(500).json({
-        success: false,
-        error: 'INSUFFICIENT_STORAGE',
-        message: 'VPS storage directory cannot be created or accessed.',
-      });
-      return;
-    }
-  }
-
   upload.single('video')(req, res, async (err) => {
     if (err) {
       if (err instanceof multer.MulterError) {
@@ -452,161 +555,58 @@ router.post('/upload', requireAuth, (req: Request, res: Response) => {
       return;
     }
 
-    const settings = db.getSettings();
-    const maxBytes = (settings.maxUploadSizeMb || 25600) * 1024 * 1024;
-    if (req.file.size > maxBytes) {
-      // Clean up oversized file
-      try {
-        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-      } catch (e) {}
-      res.status(400).json({
-        success: false,
-        error: 'LIMIT_FILE_SIZE',
-        message: `File size exceeds the configured maximum limit of ${settings.maxUploadSizeMb || 25600} MB.`,
-      });
-      return;
-    }
-
-    // Verify physical file exists and size > 0
-    if (!fs.existsSync(req.file.path) || req.file.size === 0) {
-      try {
-        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-      } catch (e) {}
-      res.status(400).json({
-        success: false,
-        error: 'FILE_CORRUPT',
-        message: 'Uploaded video file was empty or corrupted during transfer.',
-      });
-      return;
-    }
+    const tempFilePath = req.file.path;
 
     try {
-      console.log(`[VideoUpload] Processing new file: ${req.file.originalname} (${(req.file.size / (1024 * 1024)).toFixed(2)} MB)`);
+      // 1. Verify Cloudflare R2 bucket is accessible
+      await R2Service.validateBucketAccessible();
+
       const originalName = req.body.title?.trim() || req.file.originalname;
+
+      // 2. Upload video stream directly to Cloudflare R2
+      const r2Result = await R2Service.uploadVideo(
+        tempFilePath,
+        originalName,
+        req.file.mimetype || 'video/mp4'
+      );
+
+      // 3. Extract metadata, generate thumbnail, and save database record
       const videoItem = await VideoService.processNewUpload(
         originalName,
         req.file.filename,
-        req.file.path,
-        req.file.size
+        tempFilePath,
+        req.file.size,
+        r2Result.r2ObjectKey,
+        r2Result.r2Bucket
       );
 
-      console.log(`[VideoUpload] Successfully stored and registered video: ${videoItem.id}`);
+      // 4. Delete temporary VPS video file immediately!
+      try {
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+        }
+      } catch (e) {}
+
       res.status(201).json({
         success: true,
-        message: 'Video uploaded and processed successfully.',
+        message: '✓ Upload completed and stored permanently in Cloudflare R2 Object Storage.',
         video: videoItem,
       });
     } catch (processErr: any) {
       console.error('[VideoUpload] Processing error:', processErr);
-      // Clean up orphaned physical file if database registration or processing failed
       try {
-        if (req.file && fs.existsSync(req.file.path)) {
-          fs.unlinkSync(req.file.path);
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
         }
       } catch (e) {}
+
       res.status(400).json({
         success: false,
         error: 'PROCESSING_ERROR',
-        message: `Failed to process uploaded video: ${processErr.message || 'Video analysis error'}`,
+        message: `Cloudflare R2 upload failed: ${processErr.message || 'Storage error'}`,
       });
     }
   });
-});
-
-// POST /api/videos/gdrive-import - Import video from Google Drive link / ID
-router.post('/gdrive-import', requireAuth, async (req, res) => {
-  const { url, fileId, title } = req.body;
-
-  if (!url && !fileId) {
-    res.status(400).json({ error: 'Google Drive URL or fileId is required.' });
-    return;
-  }
-
-  // Extract Google Drive File ID if full URL provided
-  let driveId = fileId;
-  if (!driveId && url) {
-    const match = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/) || url.match(/\/open\?id=([a-zA-Z0-9_-]+)/);
-    if (match) {
-      driveId = match[1];
-    } else if (/^[a-zA-Z0-9_-]{20,}$/.test(url.trim())) {
-      driveId = url.trim();
-    }
-  }
-
-  if (!driveId) {
-    res.status(400).json({ error: 'Invalid Google Drive link format. Could not extract file ID.' });
-    return;
-  }
-
-  try {
-    const videoId = crypto.randomUUID();
-    const filename = `${videoId}.mp4`;
-    const destPath = path.join(UPLOAD_DIR, filename);
-
-    // Google Drive direct export download URL
-    const downloadUrl = `https://drive.google.com/uc?export=download&id=${driveId}`;
-    
-    // Download using streaming fetch or curl
-    const response = await fetch(downloadUrl);
-    if (!response.ok) {
-      // If direct link restricted or fails, test curl fallback or throw helpful message
-      res.status(400).json({
-        error: 'Unable to download file directly from Google Drive. Please ensure the file sharing is set to "Anyone with the link can view".',
-      });
-      return;
-    }
-
-    const fileStream = fs.createWriteStream(destPath);
-    // @ts-ignore
-    const body = response.body;
-    if (!body) {
-      res.status(400).json({ error: 'Empty response from Google Drive.' });
-      return;
-    }
-
-    // Convert web stream to node stream
-    // @ts-ignore
-    for await (const chunk of body) {
-      fileStream.write(chunk);
-    }
-    fileStream.end();
-
-    await new Promise<void>((resolve) => fileStream.on('finish', () => resolve()));
-
-    const stats = fs.statSync(destPath);
-    if (stats.size < 1000) {
-      // Likely an HTML confirmation page instead of video
-      const content = fs.readFileSync(destPath, 'utf8');
-      if (content.includes('<!DOCTYPE') || content.includes('<html')) {
-        fs.unlinkSync(destPath);
-        res.status(400).json({
-          error: 'Google Drive requires confirmation for large file virus scans or authentication. Please upload the file directly or use direct public link.',
-        });
-        return;
-      }
-    }
-
-    const videoItem = await VideoService.processNewUpload(
-      title || `GDrive-Video-${driveId.slice(0, 6)}`,
-      filename,
-      destPath,
-      stats.size
-    );
-
-    // Mark as gdrive source
-    const updated = db.updateVideo(videoId, { source: 'gdrive', gdriveFileId: driveId });
-
-    res.status(201).json({
-      success: true,
-      message: 'Google Drive video imported and cached successfully.',
-      video: updated || videoItem,
-    });
-  } catch (err: any) {
-    console.error('[GDriveImport] Error:', err);
-    res.status(500).json({
-      error: `Failed to import Google Drive video: ${err.message}`,
-    });
-  }
 });
 
 // PUT /api/videos/:id - Rename video
@@ -626,30 +626,49 @@ router.put('/:id', requireAuth, (req, res) => {
   res.json({ success: true, video: updated });
 });
 
-// DELETE /api/videos/:id - Delete video with active stream check and cleanup
-router.delete('/:id', requireAuth, (req, res) => {
+// DELETE /api/videos/:id - Delete video with active stream protection and Cloudflare R2 cleanup
+router.delete('/:id', requireAuth, async (req, res) => {
+  const video = db.getVideoById(req.params.id);
+  if (!video) {
+    res.status(404).json({
+      success: false,
+      reason: 'NOT_FOUND',
+      error: 'Video file not found or already deleted.',
+    });
+    return;
+  }
+
+  // 1. Active Stream Protection: Return 409 Conflict if video is currently being streamed
+  if (db.isVideoActiveInAnyStream(req.params.id)) {
+    res.status(409).json({
+      success: false,
+      reason: 'ACTIVE_STREAM_IN_USE',
+      error: 'This video is currently being used by an active livestream. Stop the livestream before deleting it.',
+    });
+    return;
+  }
+
+  // 2. Delete object from Cloudflare R2 if stored in R2
+  if (video.r2ObjectKey) {
+    try {
+      await R2Service.deleteVideo(video.r2ObjectKey);
+    } catch (e: any) {
+      console.warn(`[VideoRoutes] Notice deleting object from Cloudflare R2: ${e.message}`);
+    }
+  }
+
+  // 3. Delete database metadata record and local thumbnail
   const result = db.deleteVideo(req.params.id);
 
+  if (SupabaseService.isConfigured()) {
+    await SupabaseService.deleteVideo(req.params.id);
+    await SupabaseService.logEvent(undefined, 'DELETE', `Video "${video.originalName}" (${req.params.id}) deleted from Cloudflare R2 and Supabase.`);
+  }
+
   if (!result.success) {
-    if (result.reason === 'ACTIVE_STREAM_IN_USE') {
-      res.status(409).json({
-        success: false,
-        reason: 'ACTIVE_STREAM_IN_USE',
-        error: result.error || 'Cannot delete video while it is currently being used by an active livestream. Stop the stream first.',
-      });
-      return;
-    }
-    if (result.reason === 'NOT_FOUND') {
-      res.status(404).json({
-        success: false,
-        reason: 'NOT_FOUND',
-        error: 'Video file not found or already deleted.',
-      });
-      return;
-    }
     res.status(400).json({
       success: false,
-      error: result.error || 'Failed to delete video.',
+      error: result.error || 'Failed to delete video record.',
     });
     return;
   }
@@ -658,7 +677,7 @@ router.delete('/:id', requireAuth, (req, res) => {
     success: true,
     deleted: true,
     videoId: req.params.id,
-    message: 'Video deleted successfully from VPS storage.',
+    message: 'Video deleted successfully from Cloudflare R2 storage and Supabase database.',
   });
 });
 

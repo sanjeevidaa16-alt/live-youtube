@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import { EventEmitter } from 'events';
 import { db } from '../database/db.js';
 import { VideoService, VideoMetadata } from './videoService.js';
+import { SupabaseService } from './supabaseService.js';
 import {
   StreamConfig,
   StreamInstance,
@@ -205,15 +206,18 @@ class StreamingEngine extends EventEmitter {
 
     if (videoId) {
       const video = db.getVideoById(videoId);
-      if (video && fs.existsSync(video.path)) {
-        try {
-          videoMetadata = await VideoService.probeVideo(video.path);
-          videoValid = true;
-        } catch (err: any) {
-          videoError = err.message;
-        }
+      if (video && (video.r2ObjectKey || (video.path && fs.existsSync(video.path)))) {
+        videoValid = true;
+        videoMetadata = {
+          duration: video.duration || 0,
+          width: video.width || 1920,
+          height: video.height || 1080,
+          fps: video.fps || 30,
+          codec: video.codec || 'h264',
+          hasAudio: video.hasAudio !== false,
+        };
       } else {
-        videoError = 'Video file not found on disk.';
+        videoError = 'Video file not found in Cloudflare R2 or local storage.';
       }
     }
 
@@ -320,23 +324,33 @@ class StreamingEngine extends EventEmitter {
     }
 
     for (const v of videoList) {
-      if (!fs.existsSync(v.path)) {
+      const isR2 = !!v.r2ObjectKey;
+      const isLocal = v.path && fs.existsSync(v.path);
+      if (!isR2 && !isLocal) {
         return {
           success: false,
           code: 'VIDEO_FILE_MISSING',
-          message: `Video file "${v.originalName}" is missing on the server at ${v.path}`,
+          message: `Video file "${v.originalName}" is missing in Cloudflare R2 and local storage.`,
         };
       }
     }
 
-    // 4. Pre-flight FFprobe verification on primary video
-    try {
-      ctx.currentVideoMetadata = await VideoService.probeVideo(videoList[0].path);
-    } catch (err: any) {
-      return {
-        success: false,
-        code: 'FFPROBE_FAILED',
-        message: `Unable to analyze the video with FFprobe: ${err.message}`,
+    // 4. Pre-flight verification on primary video
+    if (videoList[0].path && fs.existsSync(videoList[0].path)) {
+      try {
+        ctx.currentVideoMetadata = await VideoService.probeVideo(videoList[0].path);
+      } catch (err: any) {
+        console.warn(`[Engine] FFprobe note for ${videoList[0].originalName}:`, err.message);
+      }
+    }
+    if (!ctx.currentVideoMetadata) {
+      ctx.currentVideoMetadata = {
+        duration: videoList[0].duration || 0,
+        width: videoList[0].width || 1920,
+        height: videoList[0].height || 1080,
+        fps: videoList[0].fps || 30,
+        codec: videoList[0].codec || 'h264',
+        hasAudio: videoList[0].hasAudio !== false,
       };
     }
 
@@ -432,13 +446,23 @@ class StreamingEngine extends EventEmitter {
     const stream = db.getStreamInstanceById(ctx.streamId) || ctx.config;
     const args: string[] = [];
 
+    // Allow streaming from local files, HTTP endpoints (Cloudflare R2 stream proxy), and TLS
+    args.push('-protocol_whitelist', 'file,http,https,tcp,tls,crypto');
+
     // Real-time input pacing
     args.push('-re');
+
+    const resolveInput = (v: any) => {
+      if (v.path && fs.existsSync(v.path)) {
+        return v.path;
+      }
+      return `http://127.0.0.1:3000/api/videos/${v.id}/file`;
+    };
 
     if (videoList.length > 1) {
       // Multi-video playlist: Create concat file
       const playlistTxtPath = path.join('/tmp', `playlist_${ctx.sessionId}.txt`);
-      const lines = videoList.map((v) => `file '${v.path.replace(/'/g, "'\\''")}'`).join('\n');
+      const lines = videoList.map((v) => `file '${resolveInput(v).replace(/'/g, "'\\''")}'`).join('\n');
       fs.writeFileSync(playlistTxtPath, lines, 'utf8');
 
       if (stream.loop !== false) {
@@ -450,7 +474,7 @@ class StreamingEngine extends EventEmitter {
       if (stream.loop !== false) {
         args.push('-stream_loop', '-1');
       }
-      args.push('-i', videoList[0].path);
+      args.push('-i', resolveInput(videoList[0]));
     }
 
     // Audio stream handling
@@ -902,6 +926,12 @@ class StreamingEngine extends EventEmitter {
       try {
         client({ ...entry, streamId });
       } catch (e) {}
+    }
+
+    // Persist critical stream logs in Supabase if configured
+    if (SupabaseService.isConfigured() && (level === 'error' || level === 'warn' || cleanMsg.includes('LIVE') || cleanMsg.includes('Starting') || cleanMsg.includes('stopped'))) {
+      const eventType = level === 'error' ? 'ERROR' : cleanMsg.includes('LIVE') ? 'START' : cleanMsg.includes('stopped') ? 'STOP' : 'INFO';
+      SupabaseService.logEvent(streamId, eventType, cleanMsg, level).catch(() => {});
     }
   }
 

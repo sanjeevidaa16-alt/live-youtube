@@ -42,9 +42,12 @@ export interface VideoItem {
   audioCodec?: string;
   hasAudio: boolean;
   bitrate?: number;
-  source?: 'upload' | 'gdrive' | 'sample';
-  gdriveFileId?: string;
+  source?: 'upload' | 'r2' | 'sample';
+  r2ObjectKey?: string;
+  r2Bucket?: string;
+  storageProvider?: 'cloudflare_r2' | 'vps';
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface PlaylistItem {
@@ -177,6 +180,92 @@ export interface StreamSessionHistory {
   rtmpUrl: string;
 }
 
+export interface R2StorageDiagnostics {
+  credentialsLoaded?: boolean;
+  endpointReachable?: boolean;
+  bucketAccessible?: boolean;
+  writePermission?: boolean;
+  readPermission?: boolean;
+  deletePermission?: boolean;
+}
+
+export interface R2StorageConfig {
+  storageProvider: 'cloudflare_r2';
+  accountId?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string; // Masked on client side
+  bucketName?: string;
+  publicUrl?: string; // Optional custom domain / R2 public URL
+  maxStorageGb?: number;
+  maxVideoSizeGb?: number;
+  lastTestedAt?: string;
+  lastTestStatus?: 'connected' | 'error' | 'untested';
+  lastTestMessage?: string;
+  diagnostics?: R2StorageDiagnostics;
+  storageUsedBytes?: number;
+  objectCount?: number;
+}
+
+export interface StorageTestResult {
+  success: boolean;
+  connected: boolean;
+  storageProvider: 'cloudflare_r2';
+  accountId?: string;
+  bucketName?: string;
+  message?: string;
+  error?: string;
+  diagnostics?: R2StorageDiagnostics;
+  storageUsedBytes?: number;
+  objectCount?: number;
+  testedAt: string;
+}
+
+export interface DatabaseDiagnostics {
+  urlConfigured: boolean;
+  anonKeyConfigured: boolean;
+  serviceRoleConfigured: boolean;
+  endpointReachable: boolean;
+  authSuccess: boolean;
+  tablesVerified: boolean;
+  connected?: boolean;
+  message: string;
+  tableDetails?: {
+    videos?: boolean;
+    playlists?: boolean;
+    streams?: boolean;
+    stream_logs?: boolean;
+    system_settings?: boolean;
+  };
+  tables?: Record<string, boolean>;
+  recordCounts?: Record<string, number>;
+}
+
+export interface DatabaseConfig {
+  databaseProvider: 'supabase' | 'supabase_postgres';
+  supabaseUrl?: string;
+  supabaseAnonKey?: string;
+  supabaseServiceRoleKey?: string; // Masked on client side
+  configured?: boolean;
+  isConfigured?: boolean;
+  lastTestedAt?: string;
+  lastTestStatus?: 'connected' | 'error' | 'untested';
+  lastTestMessage?: string;
+  diagnostics?: DatabaseDiagnostics;
+}
+
+export interface DatabaseTestResult {
+  success: boolean;
+  connected: boolean;
+  databaseProvider?: 'supabase' | 'supabase_postgres';
+  message?: string;
+  error?: string;
+  latencyMs?: number;
+  tables?: Record<string, boolean>;
+  recordCounts?: Record<string, number>;
+  diagnostics?: DatabaseDiagnostics;
+  testedAt: string;
+}
+
 export interface SystemSettings {
   defaultRtmpUrl: string;
   defaultStreamKey?: string;
@@ -190,6 +279,8 @@ export interface SystemSettings {
   allowedExtensions: string[];
   autoRestartOnServerBoot: boolean;
   maxConcurrentStreams?: number;
+  r2?: R2StorageConfig;
+  database?: DatabaseConfig;
 }
 
 export interface SystemStatus {

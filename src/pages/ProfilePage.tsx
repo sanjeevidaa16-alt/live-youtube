@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api.js';
 import { Sliders, Key, Server, CheckCircle, Radio, Shield, HardDrive, AlertTriangle } from 'lucide-react';
+import { StorageSettingsCard } from '../components/StorageSettingsCard.js';
 
 export const ProfilePage: React.FC = () => {
   const [defaultStreamKey, setDefaultStreamKey] = useState('');
@@ -217,6 +218,9 @@ export const ProfilePage: React.FC = () => {
           </button>
         </form>
       </div>
+
+      {/* Storage Settings Section */}
+      <StorageSettingsCard />
 
     </div>
   );

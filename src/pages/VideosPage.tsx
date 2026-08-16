@@ -14,6 +14,7 @@ import {
   ShieldAlert,
   HardDrive,
   Clock,
+  Cloud,
 } from 'lucide-react';
 
 interface VideosPageProps {
@@ -47,7 +48,7 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
       const res = await api.getVideos();
       setVideos(res.videos || []);
     } catch (e: any) {
-      setErrorMsg(e.message || 'Failed to load videos from VPS storage.');
+      setErrorMsg(e.message || 'Failed to load videos from storage.');
     } finally {
       setLoading(false);
     }
@@ -64,7 +65,7 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
     setSuccessMsg(null);
     setUploadState('uploading');
     setUploadProgress(0);
-    setUploadStatusText('Preparing video for VPS upload...');
+    setUploadStatusText('Preparing video upload...');
 
     try {
       const res = await api.uploadVideo(file, file.name, (percent, statusText) => {
@@ -77,8 +78,8 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
 
       setUploadState('success');
       setUploadProgress(100);
-      setUploadStatusText('Upload and processing complete.');
-      setSuccessMsg(`"${res.video?.originalName || file.name}" uploaded successfully to VPS storage!`);
+      setUploadStatusText('Upload completed and stored in Cloudflare R2.');
+      setSuccessMsg(`"${res.video?.originalName || file.name}" uploaded successfully to Cloudflare R2!`);
 
       if (res.video) {
         setVideos((prev) => [res.video, ...prev.filter((v) => v.id !== res.video.id)]);
@@ -87,7 +88,7 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
       await fetchVideos();
     } catch (err: any) {
       setUploadState('error');
-      setErrorMsg(err.message || 'Failed to upload video to VPS storage. Please try again.');
+      setErrorMsg(err.message || 'Failed to upload video to Cloudflare R2. Please verify your Storage Settings.');
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
       setTimeout(() => {
@@ -111,7 +112,7 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
     try {
       await api.deleteVideo(deleteTargetVideo.id);
       setVideos((prev) => prev.filter((v) => v.id !== deleteTargetVideo.id));
-      setSuccessMsg(`"${deleteTargetVideo.originalName}" was deleted successfully from VPS storage.`);
+      setSuccessMsg(`"${deleteTargetVideo.originalName}" was deleted successfully from Cloudflare R2 storage.`);
       setDeleteTargetVideo(null);
     } catch (e: any) {
       setErrorMsg(e.message || 'Failed to delete video. It may be currently streaming.');
@@ -306,10 +307,18 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
                       {video.originalName}
                     </h3>
                   </div>
-                  <div className="text-[11px] text-slate-400 flex items-center gap-2">
-                    <span>{formatSize(video.size)}</span>
-                    <span>•</span>
-                    <span>{new Date(video.createdAt || (video as any).uploadedAt || Date.now()).toLocaleDateString()}</span>
+                  <div className="text-[11px] text-slate-400 flex items-center justify-between gap-2 mt-1">
+                    <div className="flex items-center gap-1.5">
+                      <span>{formatSize(video.size)}</span>
+                      <span>•</span>
+                      <span>{new Date(video.createdAt || (video as any).uploadedAt || Date.now()).toLocaleDateString()}</span>
+                    </div>
+                    {video.r2ObjectKey && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">
+                        <Cloud className="w-2.5 h-2.5" />
+                        R2 Storage
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -372,12 +381,12 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
               </div>
               <div>
                 <h3 className="text-base font-bold text-white">Confirm Video Deletion</h3>
-                <p className="text-xs text-slate-400">Permanent VPS storage removal</p>
+                <p className="text-xs text-slate-400">Permanent cloud storage removal</p>
               </div>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              Are you sure you want to permanently delete <strong className="text-white font-mono">"{deleteTargetVideo.originalName}"</strong> from your VPS storage?
+              Are you sure you want to permanently delete <strong className="text-white font-mono">"{deleteTargetVideo.originalName}"</strong> from your Google Drive storage?
             </p>
 
             <div className="p-3 rounded-xl bg-black/50 border border-white/[0.06] text-[11px] text-slate-400 space-y-1">

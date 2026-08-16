@@ -4,6 +4,7 @@ import fs from 'fs';
 import { promisify } from 'util';
 import { db, UPLOAD_DIR, THUMBNAIL_DIR } from '../database/db.js';
 import { VideoItem } from '../../src/types.js';
+import { SupabaseService } from './supabaseService.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -143,12 +144,14 @@ export class VideoService {
   public static async processNewUpload(
     originalName: string,
     storedFilename: string,
-    storedFilePath: string,
-    fileSize: number
+    tempFilePath: string,
+    fileSize: number,
+    r2ObjectKey?: string,
+    r2Bucket?: string
   ): Promise<VideoItem> {
     const videoId = path.parse(storedFilename).name;
-    const metadata = await this.probeVideo(storedFilePath);
-    const thumbnailUrl = (await this.generateThumbnail(storedFilePath, videoId, metadata.duration)) || '';
+    const metadata = await this.probeVideo(tempFilePath);
+    const thumbnailUrl = (await this.generateThumbnail(tempFilePath, videoId, metadata.duration)) || '';
 
     const resolution = metadata.width > 0 && metadata.height > 0 ? `${metadata.width}x${metadata.height}` : '1080p';
 
@@ -157,7 +160,7 @@ export class VideoService {
       originalName,
       storedName: storedFilename,
       filename: storedFilename,
-      path: storedFilePath,
+      path: tempFilePath, // In Cloudflare R2 mode, permanent video is in R2
       thumbnailUrl,
       size: fileSize,
       duration: metadata.duration,
@@ -170,10 +173,28 @@ export class VideoService {
       audioCodec: metadata.audioCodec,
       hasAudio: metadata.hasAudio,
       bitrate: metadata.bitrate,
+      source: r2ObjectKey ? 'r2' : 'upload',
+      r2ObjectKey,
+      r2Bucket,
+      storageProvider: r2ObjectKey ? 'cloudflare_r2' : 'vps',
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
 
-    return db.addVideo(videoItem);
+    // Persist in local DB cache
+    db.addVideo(videoItem);
+
+    // Persist metadata in Supabase PostgreSQL database if configured
+    if (SupabaseService.isConfigured()) {
+      try {
+        await SupabaseService.insertVideo(videoItem);
+        await SupabaseService.logEvent(undefined, 'UPLOAD', `Video "${originalName}" uploaded to Cloudflare R2 and registered in Supabase.`);
+      } catch (sbErr: any) {
+        console.warn('[VideoService] Supabase insert warning:', sbErr.message);
+      }
+    }
+
+    return videoItem;
   }
 
   public static getVideoFile(id: string): { video: VideoItem; filePath: string } | null {

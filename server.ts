@@ -7,6 +7,15 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
+// Sanitize GOOGLE_APPLICATION_CREDENTIALS to prevent ENOENT crashes from non-file values (such as OAuth Client IDs)
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+  const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
+  if (!fs.existsSync(credPath) && !credPath.startsWith('{')) {
+    console.warn(`[Startup] GOOGLE_APPLICATION_CREDENTIALS is not a valid file on disk ("${credPath}"). Bypassing invalid environment variable.`);
+    delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  }
+}
+
 import authRoutes from './server/routes/authRoutes.js';
 import videoRoutes from './server/routes/videoRoutes.js';
 import playlistRoutes from './server/routes/playlistRoutes.js';
@@ -15,6 +24,8 @@ import settingsRoutes from './server/routes/settingsRoutes.js';
 import systemRoutes from './server/routes/systemRoutes.js';
 import { UPLOAD_DIR } from './server/database/db.js';
 import { streamingEngine } from './server/services/streamingEngine.js';
+import { SupabaseService } from './server/services/supabaseService.js';
+import { R2Service } from './server/services/r2Service.js';
 
 async function startServer() {
   const app = express();
@@ -30,11 +41,24 @@ async function startServer() {
   // Health check endpoint
   app.get('/api/health', async (_req, res) => {
     const diagnostics = await streamingEngine.runDiagnostics();
+    const isSupabaseConfigured = SupabaseService.isConfigured();
+    const isR2Configured = R2Service.isConfigured();
+
     res.json({
       server: 'OK',
       ffmpeg: diagnostics.ffmpegInstalled ? 'OK' : 'MISSING',
       ffprobe: diagnostics.ffprobeInstalled ? 'OK' : 'MISSING',
       streamingEngine: diagnostics.ffmpegInstalled && diagnostics.ffprobeInstalled ? 'READY' : 'DEGRADED',
+      database: {
+        provider: 'supabase_postgres',
+        configured: isSupabaseConfigured,
+        status: isSupabaseConfigured ? 'CONNECTED' : 'LOCAL_CACHE_FALLBACK',
+      },
+      storage: {
+        provider: 'cloudflare_r2',
+        configured: isR2Configured,
+        status: isR2Configured ? 'READY' : 'NOT_CONFIGURED',
+      },
       status: 'ok',
       service: 'CastLoop 24/7 RTMP Streamer',
       timestamp: new Date().toISOString(),

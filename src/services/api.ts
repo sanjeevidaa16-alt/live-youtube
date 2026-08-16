@@ -186,13 +186,6 @@ export const api = {
       method: 'DELETE',
     }),
 
-  // Google Drive
-  importGDriveVideo: (data: { url?: string; fileId?: string; title?: string }) =>
-    request<{ success: boolean; message: string; video: VideoItem }>('/api/videos/gdrive-import', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
-
   // Videos
   getVideos: () => request<{ videos: VideoItem[] }>('/api/videos'),
   getVideo: (id: string) => request<{ video: VideoItem }>(`/api/videos/${id}`),
@@ -321,9 +314,9 @@ export const api = {
       }
     }
 
-    // Step 3: Complete & assemble on VPS storage
+    // Step 3: Complete & stream to Google Drive
     if (onProgress) {
-      onProgress(99, 'Assembling & processing video on VPS storage...');
+      onProgress(99, 'Uploading to Google Drive...');
     }
 
     const completeRes = await request<{ success: boolean; video: VideoItem; message?: string }>(
@@ -341,7 +334,7 @@ export const api = {
     );
 
     if (onProgress) {
-      onProgress(100, 'Upload complete.');
+      onProgress(100, '✓ Upload completed and stored in Google Drive.');
     }
 
     return {
@@ -425,12 +418,39 @@ export const api = {
   getHistory: () => request<{ history: StreamSessionHistory[] }>('/api/stream/history'),
   clearHistory: () => request<{ success: boolean }>('/api/stream/history', { method: 'DELETE' }),
 
-  // Settings
+  // Settings, Database & Cloudflare R2 Storage
   getSettings: () => request<{ settings: SystemSettings }>('/api/settings'),
   updateSettings: (settings: Partial<SystemSettings>) =>
     request<{ success: boolean; settings: SystemSettings; message: string }>('/api/settings', {
       method: 'PUT',
       body: JSON.stringify(settings),
+    }),
+  getDatabaseConfig: () =>
+    request<{ config: import('../types.js').DatabaseConfig; diagnostics: import('../types.js').DatabaseDiagnostics }>(
+      '/api/settings/database'
+    ),
+  saveDatabaseConfig: (data: Partial<import('../types.js').DatabaseConfig>) =>
+    request<{ success: boolean; database: import('../types.js').DatabaseConfig; message: string }>(
+      '/api/settings/database',
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }
+    ),
+  testDatabaseConnection: (data?: Partial<import('../types.js').DatabaseConfig>) =>
+    request<import('../types.js').DatabaseTestResult>('/api/settings/database/test', {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    }),
+  testStorageConnection: (data?: Partial<import('../types.js').R2StorageConfig>) =>
+    request<import('../types.js').StorageTestResult>('/api/settings/storage/test', {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    }),
+  saveStorageSettings: (data: Partial<import('../types.js').R2StorageConfig>) =>
+    request<{ success: boolean; r2: import('../types.js').R2StorageConfig; message: string }>('/api/settings/storage', {
+      method: 'POST',
+      body: JSON.stringify(data),
     }),
 
   // System
