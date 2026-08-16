@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // User profile document: users/{uid}
+    match /users/{uid} {
+      // User can read their own profile
+      allow read: if request.auth != null && request.auth.uid == uid;
+      // User can create their profile on signup
+      allow create: if request.auth != null && request.auth.uid == uid;
+      // User can update their own profile
+      allow update: if request.auth != null && request.auth.uid == uid;
+      // No deletion by other users
+      allow delete: if false;
+    }
+
+    // Username reservation: usernames/{username}
+    match /usernames/{username} {
+      // Anyone authenticated or unauthenticated can read to check availability
+      allow read: if true;
+      // An authenticated user can reserve a username if it doesn't already exist
+      allow create: if request.auth != null && !exists(/databases/$(database)/documents/usernames/$(username));
+      // User who reserved it can update or keep it
+      allow update: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+  }
+}

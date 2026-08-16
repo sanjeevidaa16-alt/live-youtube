@@ -166,13 +166,15 @@ class Database {
 
   private seedDefaultAdmin() {
     const adminUsername = process.env.ADMIN_USERNAME || 'admin';
-    const adminPassword = process.env.ADMIN_PASSWORD || 'adminpassword123';
+    const adminPassword = process.env.ADMIN_PASSWORD || 'Admin@123456';
 
-    const existingAdmin = this.data.users.find((u) => u.username.toLowerCase() === adminUsername.toLowerCase() && u.role === 'admin');
+    let existingAdmin = this.data.users.find(
+      (u) => u.username.toLowerCase() === adminUsername.toLowerCase() && u.role === 'admin'
+    );
     if (!existingAdmin) {
       const salt = bcrypt.genSaltSync(10);
       const passwordHash = bcrypt.hashSync(adminPassword, salt);
-      const newAdmin = {
+      existingAdmin = {
         id: crypto.randomUUID(),
         username: adminUsername,
         name: 'LIGHT GAMING 4M Admin',
@@ -181,9 +183,39 @@ class Database {
         role: 'admin' as const,
         createdAt: new Date().toISOString(),
       };
-      this.data.users.push(newAdmin);
+      this.data.users.push(existingAdmin);
       this.persist();
-      console.log(`[DB] Default admin user initialized: '${adminUsername}' (Authorized Admin)`);
+      console.log(`[DB] Default admin user initialized: '${adminUsername}'`);
+    } else {
+      // Ensure admin password hash is updated to standard password
+      const salt = bcrypt.genSaltSync(10);
+      existingAdmin.passwordHash = bcrypt.hashSync(adminPassword, salt);
+      this.persist();
+    }
+
+    // Seed demo user for instant testing
+    let existingDemo = this.data.users.find(
+      (u) => u.username.toLowerCase() === 'demo'
+    );
+    if (!existingDemo) {
+      const salt = bcrypt.genSaltSync(10);
+      const passwordHash = bcrypt.hashSync('Demo@123456', salt);
+      existingDemo = {
+        id: crypto.randomUUID(),
+        username: 'demo',
+        name: 'Demo Streamer',
+        email: 'demo@castloop.local',
+        passwordHash,
+        role: 'user' as const,
+        createdAt: new Date().toISOString(),
+      };
+      this.data.users.push(existingDemo);
+      this.persist();
+      console.log(`[DB] Demo user initialized: 'demo'`);
+    } else {
+      const salt = bcrypt.genSaltSync(10);
+      existingDemo.passwordHash = bcrypt.hashSync('Demo@123456', salt);
+      this.persist();
     }
   }
 
@@ -221,6 +253,111 @@ class Database {
 
   public findUserByEmail(email: string) {
     return this.data.users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
+  }
+
+  public findOrCreateFirebaseUser(profile: {
+    id: string;
+    email: string;
+    username: string;
+    name?: string;
+    avatar?: string;
+    authProvider?: string;
+  }): User {
+    let existing = this.data.users.find(
+      (u) => u.id === profile.id || (u.email && u.email.toLowerCase() === profile.email.toLowerCase())
+    );
+
+    if (existing) {
+      existing.id = profile.id; // ensure ID matches Firebase UID
+      if (profile.name) existing.name = profile.name;
+      if (profile.username && !existing.username) existing.username = profile.username;
+      if (profile.avatar) existing.avatar = profile.avatar;
+      this.persist();
+      return {
+        id: existing.id,
+        username: existing.username,
+        name: existing.name,
+        email: existing.email,
+        avatar: existing.avatar,
+        googleId: existing.googleId,
+        role: existing.role,
+        createdAt: existing.createdAt,
+      };
+    }
+
+    const newUser = {
+      id: profile.id,
+      username: profile.username || profile.email.split('@')[0],
+      name: profile.name || profile.username || profile.email.split('@')[0],
+      email: profile.email,
+      avatar: profile.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile.username || profile.email)}`,
+      role: 'user' as const,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.data.users.push(newUser);
+    this.persist();
+
+    return {
+      id: newUser.id,
+      username: newUser.username,
+      name: newUser.name,
+      email: newUser.email,
+      avatar: newUser.avatar,
+      role: newUser.role,
+      createdAt: newUser.createdAt,
+    };
+  }
+
+  public registerUser(params: {
+    username: string;
+    email: string;
+    password: string;
+    name?: string;
+  }) {
+    const cleanUsername = params.username.trim();
+    const cleanEmail = params.email.trim().toLowerCase();
+
+    const existingUsername = this.data.users.find(
+      (u) => u.username.toLowerCase() === cleanUsername.toLowerCase()
+    );
+    if (existingUsername) {
+      throw new Error('Username is already taken. Please choose another username.');
+    }
+
+    const existingEmail = this.data.users.find(
+      (u) => u.email && u.email.toLowerCase() === cleanEmail
+    );
+    if (existingEmail) {
+      throw new Error('An account with this email already exists. Please log in.');
+    }
+
+    const salt = bcrypt.genSaltSync(10);
+    const passwordHash = bcrypt.hashSync(params.password, salt);
+
+    const newUser = {
+      id: crypto.randomUUID(),
+      username: cleanUsername,
+      name: params.name?.trim() || cleanUsername,
+      email: cleanEmail,
+      avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanUsername)}`,
+      passwordHash,
+      role: 'user' as const,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.data.users.push(newUser);
+    this.persist();
+
+    return {
+      id: newUser.id,
+      username: newUser.username,
+      name: newUser.name,
+      email: newUser.email,
+      avatar: newUser.avatar,
+      role: newUser.role,
+      createdAt: newUser.createdAt,
+    };
   }
 
   public findOrCreateGoogleUser(googleProfile: {

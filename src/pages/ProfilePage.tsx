@@ -58,10 +58,17 @@ export const ProfilePage: React.FC = () => {
         <div className="flex-1 text-center sm:text-left space-y-2">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-600/20 border border-red-500/30 text-red-400 text-xs font-bold uppercase tracking-wider">
             <ShieldCheck className="w-3.5 h-3.5" />
-            <span>{user?.role === 'admin' ? 'Authorized System Admin' : 'Google Verified User'}</span>
+            <span>
+              {user?.role === 'admin'
+                ? 'Authorized System Admin'
+                : user?.googleId
+                ? 'Google Verified User'
+                : 'Firebase Verified User'}
+            </span>
           </div>
 
           <h2 className="text-2xl font-bold text-white">{user?.name || user?.username}</h2>
+          <p className="text-xs text-red-400 font-mono">@{user?.username}</p>
           
           <div className="flex flex-wrap items-center justify-center sm:justify-start gap-4 text-xs text-slate-400 pt-1">
             <span className="flex items-center gap-1.5">

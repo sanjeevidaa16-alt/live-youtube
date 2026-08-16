@@ -64,14 +64,6 @@ async function request<T>(endpoint: string, options: RequestInit = {}, maxRetrie
       throw new Error('Unable to connect to server. Please check your network connection.');
     }
 
-    if (response.status === 401) {
-      if (endpoint === '/api/auth/me') {
-        clearStoredToken();
-        window.dispatchEvent(new Event('auth:unauthorized'));
-      }
-      throw new Error('Session expired or unauthorized. Please log in again.');
-    }
-
     // Intercept transient proxy errors (503 Service Unavailable, 502 Bad Gateway, 504 Gateway Timeout, 429, 408)
     if ([502, 503, 504, 429, 408].includes(response.status)) {
       if (attempt < maxRetries) {
@@ -91,6 +83,18 @@ async function request<T>(endpoint: string, options: RequestInit = {}, maxRetrie
       data = rawText ? JSON.parse(rawText) : {};
     } catch (e) {
       parseFailed = true;
+    }
+
+    if (response.status === 401) {
+      if (endpoint === '/api/auth/me') {
+        clearStoredToken();
+        window.dispatchEvent(new Event('auth:unauthorized'));
+        throw new Error('Session expired or unauthorized. Please log in again.');
+      }
+      if (endpoint.includes('/api/auth/login')) {
+        throw new Error(data.error || data.message || 'Invalid email/username or password.');
+      }
+      throw new Error(data.error || data.message || 'Unauthorized access. Please log in again.');
     }
 
     if (parseFailed) {
@@ -121,6 +125,23 @@ async function request<T>(endpoint: string, options: RequestInit = {}, maxRetrie
 
 export const api = {
   // Auth
+  signup: (params: { username: string; email: string; password: string; name?: string }) =>
+    request<AuthResponse>('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+  syncFirebaseUser: (profile: {
+    uid: string;
+    email: string;
+    username: string;
+    name?: string;
+    avatar?: string;
+    authProvider?: 'google' | 'password';
+  }) =>
+    request<AuthResponse>('/api/auth/firebase-sync', {
+      method: 'POST',
+      body: JSON.stringify(profile),
+    }),
   login: (username: string, password: string) =>
     request<AuthResponse>('/api/auth/login', {
       method: 'POST',

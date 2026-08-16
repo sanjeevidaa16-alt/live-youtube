@@ -1,0 +1,23 @@
+{
+  "entities": {
+    "UserProfile": {
+      "collection": "users",
+      "fields": {
+        "username": { "type": "string", "description": "Unique username chosen by user" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "authProvider": { "type": "string", "description": "Authentication method (google or password)" },
+        "status": { "type": "string", "description": "Account status (active)" },
+        "createdAt": { "type": "string", "description": "Account creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last profile update timestamp" }
+      }
+    },
+    "UsernameIndex": {
+      "collection": "usernames",
+      "fields": {
+        "uid": { "type": "string", "description": "Firebase UID of user who owns this username" },
+        "createdAt": { "type": "string", "description": "Reservation timestamp" }
+      }
+    }
+  }
+}

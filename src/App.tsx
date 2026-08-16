@@ -14,6 +14,8 @@ import { PlaylistPage } from './pages/PlaylistPage.js';
 import { StreamControlPage } from './pages/StreamControlPage.js';
 import { ProfilePage } from './pages/ProfilePage.js';
 import { AdminPage } from './pages/AdminPage.js';
+import { LoginPage } from './pages/LoginPage.js';
+import { SignupPage } from './pages/SignupPage.js';
 
 const PROTECTED_TABS = ['dashboard', 'videos', 'playlist', 'stream', 'profile'];
 
@@ -22,6 +24,8 @@ const parseUrlTab = (): string | null => {
   const path = window.location.pathname.toLowerCase().trim();
 
   if (hash === 'admin' || path.includes('/admin')) return 'admin';
+  if (hash === 'login' || path.includes('/login')) return 'login';
+  if (hash === 'signup' || path.includes('/signup')) return 'signup';
   if (hash === 'dashboard' || path.includes('/dashboard')) return 'dashboard';
   if (hash === 'videos' || path.includes('/videos')) return 'videos';
   if (hash === 'playlist' || path.includes('/playlist')) return 'playlist';
@@ -164,12 +168,26 @@ const MainLayout: React.FC = () => {
 
   const renderActivePage = () => {
     // Strict Route Guard:
-    // If authenticated and currentTab is 'home', never render LandingPage, render Dashboard instead.
-    if (isAuthenticated && currentTab === 'home') {
+    // If authenticated and currentTab is 'home', 'login', or 'signup', never render LandingPage/LoginPage, render Dashboard instead.
+    if (isAuthenticated && (currentTab === 'home' || currentTab === 'login' || currentTab === 'signup')) {
       return <UserDashboardPage onNavigate={handleSelectTab} />;
     }
 
     switch (currentTab) {
+      case 'login':
+        return (
+          <LoginPage
+            onNavigateToSignup={() => handleSelectTab('signup')}
+            onSuccess={handleLoginSuccess}
+          />
+        );
+      case 'signup':
+        return (
+          <SignupPage
+            onNavigateToLogin={() => handleSelectTab('login')}
+            onSuccess={handleLoginSuccess}
+          />
+        );
       case 'home':
         return (
           <LandingPage
