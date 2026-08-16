@@ -1,0 +1,6 @@
+{
+  "name": "CastLoop 24/7 RTMP Streamer",
+  "description": "Production-ready 24/7 YouTube RTMP video loop streaming engine with server-side FFmpeg process management, loop automation, and monitoring dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

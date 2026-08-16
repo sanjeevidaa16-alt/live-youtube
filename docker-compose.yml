@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  castloop:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: castloop-streamer
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - JWT_SECRET=castloop-production-super-secret-key-change-this-in-env
+      - ADMIN_USER=admin
+      - ADMIN_PASS=adminpassword123
+      - FFMPEG_PATH=ffmpeg
+      - FFPROBE_PATH=ffprobe
+    volumes:
+      - castloop-data:/app/data
+
+volumes:
+  castloop-data:
+    driver: local

@@ -1,0 +1,51 @@
+{
+  "users": [
+    {
+      "id": "643bed87-d235-456b-a39e-d5ccca50f488",
+      "username": "admin",
+      "passwordHash": "$2b$10$cLbUrcDd5gA/AEgDAWvVruU8AcES79WicQsu112kKvzD7tzG237Ze",
+      "role": "admin",
+      "createdAt": "2026-08-16T03:56:51.574Z"
+    },
+    {
+      "id": "4a8fb9fc-e4c7-4fb3-8897-9780f297e727",
+      "username": "sanjeevidaa16-61a5",
+      "name": "Light Gamer (Google User)",
+      "email": "sanjeevidaa16@gmail.com",
+      "avatar": "https://api.dicebear.com/7.x/bottts/svg?seed=LightGamerGoogle",
+      "role": "user",
+      "createdAt": "2026-08-16T05:42:52.700Z"
+    }
+  ],
+  "videos": [],
+  "playlists": [],
+  "streamInstances": [],
+  "activeConfig": null,
+  "history": [],
+  "settings": {
+    "defaultRtmpUrl": "rtmps://a.rtmps.youtube.com/live2",
+    "defaultQuality": "1080p",
+    "defaultBitrate": "4000k",
+    "defaultFps": 30,
+    "autoReconnect": true,
+    "reconnectDelay": 5,
+    "maxReconnectAttempts": 20,
+    "maxUploadSizeMb": 25600,
+    "allowedExtensions": [
+      ".mp4",
+      ".mkv",
+      ".mov",
+      ".avi",
+      ".webm",
+      ".ts",
+      ".flv",
+      ".m4v",
+      ".3gp",
+      ".wmv",
+      ".mpeg",
+      ".mpg"
+    ],
+    "autoRestartOnServerBoot": true,
+    "maxConcurrentStreams": 5
+  }
+}
