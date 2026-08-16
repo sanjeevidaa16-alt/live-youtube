@@ -22,9 +22,11 @@ import playlistRoutes from './server/routes/playlistRoutes.js';
 import streamRoutes from './server/routes/streamRoutes.js';
 import settingsRoutes from './server/routes/settingsRoutes.js';
 import systemRoutes from './server/routes/systemRoutes.js';
+import storageRoutes from './server/routes/storageRoutes.js';
 import { UPLOAD_DIR } from './server/database/db.js';
 import { streamingEngine } from './server/services/streamingEngine.js';
 import { SupabaseService } from './server/services/supabaseService.js';
+import { SupabaseStorageService } from './server/services/supabaseStorageService.js';
 
 async function startServer() {
   const app = express();
@@ -41,6 +43,7 @@ async function startServer() {
   app.get('/api/health', async (_req, res) => {
     const diagnostics = await streamingEngine.runDiagnostics();
     const isSupabaseConfigured = SupabaseService.isConfigured();
+    const storageHealth = await SupabaseStorageService.getHealth().catch(() => ({ storageConfigured: false, bucketConfigured: false, bucket: 'videos' }));
 
     res.json({
       server: 'OK',
@@ -51,6 +54,13 @@ async function startServer() {
         provider: 'supabase_postgres',
         configured: isSupabaseConfigured,
         status: isSupabaseConfigured ? 'CONNECTED' : 'LOCAL_CACHE_FALLBACK',
+      },
+      storage: {
+        provider: 'supabase_storage',
+        configured: storageHealth.storageConfigured,
+        bucketConfigured: storageHealth.bucketConfigured,
+        bucket: 'videos',
+        status: storageHealth.storageConfigured ? 'CONNECTED' : 'NOT_CONFIGURED',
       },
       status: 'ok',
       service: 'CastLoop 24/7 RTMP Streamer',
@@ -66,6 +76,7 @@ async function startServer() {
   app.use('/api/stream', streamRoutes);
   app.use('/api/settings', settingsRoutes);
   app.use('/api/system', systemRoutes);
+  app.use('/api/storage', storageRoutes);
 
   // Global JSON error handler for all /api endpoints to prevent HTML error responses
   app.use('/api', (err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

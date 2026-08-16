@@ -7,6 +7,7 @@ import { Readable } from 'stream';
 import { db, UPLOAD_DIR } from '../database/db.js';
 import { VideoService } from '../services/videoService.js';
 import { SupabaseService } from '../services/supabaseService.js';
+import { SupabaseStorageService } from '../services/supabaseStorageService.js';
 import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
@@ -187,13 +188,13 @@ function pipeWebStream(stream: any, res: Response) {
 
 // Handler for streaming raw video for preview in browser & FFmpeg
 async function handleVideoStream(req: Request, res: Response) {
-  const video = db.getVideoById(req.params.id);
-  if (!video) {
-    res.status(404).json({ error: 'Video not found.' });
+  const result = await VideoService.getVideoFile(req.params.id);
+  if (!result) {
+    res.status(404).json({ error: 'Video file not found in Supabase Storage or server disk.' });
     return;
   }
 
-  const filePath = video.path || path.join(UPLOAD_DIR, video.storedName);
+  const { filePath } = result;
 
   if (filePath && fs.existsSync(filePath)) {
     const stat = fs.statSync(filePath);
@@ -576,7 +577,16 @@ router.delete('/:id', requireAuth, async (req, res) => {
     return;
   }
 
-  // 2. Delete local physical file if exists
+  // 2. Delete Supabase Storage object if stored in Supabase Storage
+  if (video.storagePath) {
+    try {
+      await SupabaseStorageService.deleteVideo(video.storagePath, video.storageBucket || 'videos');
+    } catch (e: any) {
+      console.warn(`[VideoRoutes] Notice deleting object from Supabase Storage: ${e.message}`);
+    }
+  }
+
+  // 3. Delete local physical file if exists
   if (video.path && fs.existsSync(video.path)) {
     try {
       fs.unlinkSync(video.path);
@@ -585,7 +595,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
     }
   }
 
-  // 3. Delete database metadata record and local thumbnail
+  // 4. Delete database metadata record and local thumbnail
   const result = db.deleteVideo(req.params.id);
 
   if (SupabaseService.isConfigured()) {

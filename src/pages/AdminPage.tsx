@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 
 import { DatabaseSettingsCard } from '../components/DatabaseSettingsCard.js';
+import { StorageSettingsCard } from '../components/StorageSettingsCard.js';
 
 export const AdminPage: React.FC = () => {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
@@ -298,6 +299,9 @@ export const AdminPage: React.FC = () => {
 
       {/* Supabase Primary Relational Database */}
       <DatabaseSettingsCard onSaved={fetchAdminData} />
+
+      {/* Supabase Storage */}
+      <StorageSettingsCard />
 
     </div>
   );

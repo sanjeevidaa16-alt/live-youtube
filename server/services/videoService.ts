@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import { db, UPLOAD_DIR, THUMBNAIL_DIR } from '../database/db.js';
 import { VideoItem } from '../../src/types.js';
 import { SupabaseService } from './supabaseService.js';
+import { SupabaseStorageService } from './supabaseStorageService.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -157,6 +158,20 @@ export class VideoService {
     const metadata = await this.probeVideo(permanentPath);
     const thumbnailUrl = (await this.generateThumbnail(permanentPath, videoId, metadata.duration)) || '';
 
+    let storagePath: string | undefined = undefined;
+    let storageBucket: string = 'videos';
+
+    if (SupabaseStorageService.isConfigured()) {
+      try {
+        const objectPath = `videos/${videoId}/${storedFilename}`;
+        const uploadResult = await SupabaseStorageService.uploadVideo(permanentPath, objectPath, 'video/mp4', 'videos');
+        storagePath = uploadResult.objectPath;
+        storageBucket = uploadResult.bucket;
+      } catch (uploadErr: any) {
+        console.warn('[VideoService] Supabase Storage upload warning:', uploadErr.message);
+      }
+    }
+
     const resolution = metadata.width > 0 && metadata.height > 0 ? `${metadata.width}x${metadata.height}` : '1080p';
 
     const videoItem: VideoItem = {
@@ -178,7 +193,9 @@ export class VideoService {
       hasAudio: metadata.hasAudio,
       bitrate: metadata.bitrate,
       source: 'upload',
-      storageProvider: 'vps',
+      storageProvider: storagePath ? 'supabase_storage' : 'vps',
+      storagePath,
+      storageBucket,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -190,7 +207,7 @@ export class VideoService {
     if (SupabaseService.isConfigured()) {
       try {
         await SupabaseService.insertVideo(videoItem);
-        await SupabaseService.logEvent(undefined, 'UPLOAD', `Video "${originalName}" uploaded to local storage and registered in Supabase.`);
+        await SupabaseService.logEvent(undefined, 'UPLOAD', `Video "${originalName}" uploaded to Supabase Storage and registered in Supabase.`);
       } catch (sbErr: any) {
         console.warn('[VideoService] Supabase insert warning:', sbErr.message);
       }
@@ -199,10 +216,28 @@ export class VideoService {
     return videoItem;
   }
 
-  public static getVideoFile(id: string): { video: VideoItem; filePath: string } | null {
+  public static async getVideoFile(id: string): Promise<{ video: VideoItem; filePath: string } | null> {
     const video = db.getVideoById(id);
     if (!video) return null;
-    if (!fs.existsSync(video.path)) return null;
-    return { video, filePath: video.path };
+
+    const filePath = video.path || path.join(UPLOAD_DIR, video.storedName);
+
+    if (fs.existsSync(filePath)) {
+      return { video, filePath };
+    }
+
+    // If local file is missing but stored in Supabase Storage, download on demand
+    if (video.storagePath && SupabaseStorageService.isConfigured()) {
+      try {
+        await SupabaseStorageService.downloadVideo(video.storagePath, filePath, video.storageBucket || 'videos');
+        if (fs.existsSync(filePath)) {
+          return { video, filePath };
+        }
+      } catch (err: any) {
+        console.warn(`[VideoService] Failed to download video from Supabase Storage for streaming (${id}):`, err.message);
+      }
+    }
+
+    return null;
   }
 }

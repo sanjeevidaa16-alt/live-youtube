@@ -443,6 +443,16 @@ export const api = {
       body: JSON.stringify(data || {}),
     }),
 
+  // Supabase Storage
+  getStorageHealth: () =>
+    request<{ supabaseConfigured: boolean; storageConfigured: boolean; bucketConfigured: boolean; bucket: string; environment: string }>(
+      '/api/storage/health'
+    ),
+  testStorageConnection: () =>
+    request<import('../types.js').StorageTestResult>('/api/storage/test', {
+      method: 'POST',
+    }),
+
 
   // System
   getSystemStatus: () => request<{ status: SystemStatus }>('/api/system/status'),

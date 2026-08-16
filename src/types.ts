@@ -45,7 +45,9 @@ export interface VideoItem {
   source?: 'upload' | 'r2' | 'sample';
   r2ObjectKey?: string;
   r2Bucket?: string;
-  storageProvider?: 'cloudflare_r2' | 'vps';
+  storagePath?: string;
+  storageBucket?: string;
+  storageProvider?: 'supabase_storage' | 'cloudflare_r2' | 'vps';
   createdAt: string;
   updatedAt?: string;
 }
@@ -304,4 +306,16 @@ export interface StreamDiagnostics {
 export interface AuthResponse {
   token: string;
   user: User;
+}
+
+export interface StorageTestResult {
+  success: boolean;
+  connected: boolean;
+  bucketFound: boolean;
+  writeTestPassed: boolean;
+  readTestPassed: boolean;
+  deleteTestPassed: boolean;
+  message: string;
+  error?: string;
+  testedAt: string;
 }

@@ -12,7 +12,7 @@ class SupabaseServiceClass {
 
   private initFromEnv(): void {
     const url = process.env.SUPABASE_URL || '';
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
+    const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '';
 
     if (url && key) {
       try {
@@ -131,7 +131,7 @@ class SupabaseServiceClass {
     supabaseServiceRoleKey?: string;
   }): Promise<DatabaseTestResult> {
     const url = (override?.supabaseUrl || process.env.SUPABASE_URL || this.currentUrl || '').trim();
-    const key = (override?.supabaseServiceRoleKey || override?.supabaseAnonKey || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || this.currentKey || '').trim();
+    const key = (override?.supabaseServiceRoleKey || override?.supabaseAnonKey || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || this.currentKey || '').trim();
 
     const diagnostics: DatabaseDiagnostics = {
       urlConfigured: false,
@@ -338,10 +338,12 @@ class SupabaseServiceClass {
         audioCodec: row.audio_codec || 'aac',
         hasAudio: row.has_audio !== false,
         bitrate: row.bitrate ? Number(row.bitrate) : undefined,
-        source: 'r2',
+        source: 'upload',
         r2ObjectKey: row.r2_object_key,
         r2Bucket: row.r2_bucket,
-        storageProvider: 'cloudflare_r2',
+        storagePath: row.storage_path || row.r2_object_key,
+        storageBucket: row.storage_bucket || row.r2_bucket || 'videos',
+        storageProvider: 'supabase_storage',
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       }));
@@ -379,10 +381,12 @@ class SupabaseServiceClass {
         audioCodec: data.audio_codec || 'aac',
         hasAudio: data.has_audio !== false,
         bitrate: data.bitrate ? Number(data.bitrate) : undefined,
-        source: 'r2',
+        source: 'upload',
         r2ObjectKey: data.r2_object_key,
         r2Bucket: data.r2_bucket,
-        storageProvider: 'cloudflare_r2',
+        storagePath: data.storage_path || data.r2_object_key,
+        storageBucket: data.storage_bucket || data.r2_bucket || 'videos',
+        storageProvider: 'supabase_storage',
         createdAt: data.created_at,
         updatedAt: data.updated_at,
       };
