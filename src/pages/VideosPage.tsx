@@ -4,19 +4,16 @@ import { VideoItem } from '../types.js';
 import {
   Film,
   Upload,
-  Cloud,
   Play,
   Trash2,
   Edit2,
   CheckCircle,
   AlertTriangle,
-  Radio,
   FileVideo,
-  Layers,
-  Sparkles,
-  Download,
   Loader2,
   ShieldAlert,
+  HardDrive,
+  Clock,
 } from 'lucide-react';
 
 interface VideosPageProps {
@@ -31,12 +28,6 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
   const [uploadStatusText, setUploadStatusText] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-
-  // Google Drive Modal
-  const [gdriveModalOpen, setGdriveModalOpen] = useState(false);
-  const [gdriveUrl, setGdriveUrl] = useState('');
-  const [gdriveTitle, setGdriveTitle] = useState('');
-  const [gdriveImporting, setGdriveImporting] = useState(false);
 
   // Video Preview Modal
   const [previewVideo, setPreviewVideo] = useState<VideoItem | null>(null);
@@ -56,7 +47,7 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
       const res = await api.getVideos();
       setVideos(res.videos || []);
     } catch (e: any) {
-      setErrorMsg(e.message || 'Failed to load videos.');
+      setErrorMsg(e.message || 'Failed to load videos from VPS storage.');
     } finally {
       setLoading(false);
     }
@@ -87,18 +78,16 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
       setUploadState('success');
       setUploadProgress(100);
       setUploadStatusText('Upload and processing complete.');
-      setSuccessMsg(`"${res.video?.originalName || file.name}" uploaded successfully!`);
+      setSuccessMsg(`"${res.video?.originalName || file.name}" uploaded successfully to VPS storage!`);
 
-      // 1. Immediately insert new video in list for instant feedback
       if (res.video) {
         setVideos((prev) => [res.video, ...prev.filter((v) => v.id !== res.video.id)]);
       }
 
-      // 2. Fetch full list once to guarantee 100% synchronization
       await fetchVideos();
     } catch (err: any) {
       setUploadState('error');
-      setErrorMsg(err.message || 'Failed to upload video. Please check the file and try again.');
+      setErrorMsg(err.message || 'Failed to upload video to VPS storage. Please try again.');
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
       setTimeout(() => {
@@ -113,32 +102,6 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
     await startUpload(file);
   };
 
-  const handleGdriveSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!gdriveUrl) return;
-
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    setGdriveImporting(true);
-
-    try {
-      const res = await api.importGDriveVideo({
-        url: gdriveUrl.trim(),
-        title: gdriveTitle.trim() || undefined,
-      });
-      setSuccessMsg(`Google Drive video "${res.video.originalName}" imported successfully!`);
-      setGdriveModalOpen(false);
-      setGdriveUrl('');
-      setGdriveTitle('');
-      await fetchVideos();
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to import video from Google Drive.');
-    } finally {
-      setGdriveImporting(false);
-    }
-  };
-
-  // Safe Video Delete with double-delete protection and immediate UI sync
   const handleConfirmDelete = async () => {
     if (!deleteTargetVideo || isDeleting) return;
 
@@ -147,7 +110,6 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
 
     try {
       await api.deleteVideo(deleteTargetVideo.id);
-      // Remove immediately from in-memory state
       setVideos((prev) => prev.filter((v) => v.id !== deleteTargetVideo.id));
       setSuccessMsg(`"${deleteTargetVideo.originalName}" was deleted successfully from VPS storage.`);
       setDeleteTargetVideo(null);
@@ -200,26 +162,18 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/10 border border-red-500/30 text-red-400 text-xs font-bold uppercase tracking-wider mb-2">
             <Film className="w-3.5 h-3.5 text-red-500" />
-            Media Storage & Ingest
+            Direct VPS Local Storage
           </div>
           <h1 className="text-3xl font-extrabold text-white tracking-tight">
             Video Library
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Upload files up to 10GB or import directly from Google Drive into your Cloud VPS storage.
+            Store video clips locally on your VPS server for continuous 24/7 FFmpeg broadcasting.
           </p>
         </div>
 
-        {/* Upload Action Buttons */}
+        {/* Upload Action Button */}
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setGdriveModalOpen(true)}
-            className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-white flex items-center gap-2 transition-all cursor-pointer shadow-md"
-          >
-            <Cloud className="w-4 h-4 text-red-400" />
-            <span>Google Drive Import</span>
-          </button>
-
           <input
             type="file"
             ref={fileInputRef}
@@ -246,7 +200,7 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
             ) : (
               <>
                 <Upload className="w-4 h-4" />
-                <span>Upload Video File</span>
+                <span>Upload Video to VPS</span>
               </>
             )}
           </button>
@@ -259,7 +213,7 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
           <div className="flex justify-between text-xs font-semibold text-slate-300">
             <span className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-              {uploadStatusText || (uploadState === 'processing' ? 'Processing video and generating thumbnail...' : 'Uploading video file to VPS...')}
+              {uploadStatusText || (uploadState === 'processing' ? 'Analyzing metadata and generating thumbnail...' : 'Uploading video file directly to VPS...')}
             </span>
             <span className="text-red-400 font-mono font-bold">{uploadProgress}%</span>
           </div>
@@ -279,7 +233,7 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
             <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
             <span>{errorMsg}</span>
           </div>
-          <button onClick={() => setErrorMsg(null)} className="text-red-400 hover:text-white px-1">✕</button>
+          <button onClick={() => setErrorMsg(null)} className="text-red-400 hover:text-white px-1 cursor-pointer">✕</button>
         </div>
       )}
 
@@ -289,7 +243,7 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
             <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>{successMsg}</span>
           </div>
-          <button onClick={() => setSuccessMsg(null)} className="text-emerald-400 hover:text-white">✕</button>
+          <button onClick={() => setSuccessMsg(null)} className="text-emerald-400 hover:text-white cursor-pointer">✕</button>
         </div>
       )}
 
@@ -306,7 +260,7 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
           <div className="max-w-md mx-auto">
             <h3 className="text-lg font-bold text-white">No videos in your library yet</h3>
             <p className="text-xs text-slate-400 mt-1 mb-4">
-              Upload video clips (MP4, MKV, MOV) or import straight from Google Drive to begin 24/7 broadcasting.
+              Upload MP4, MKV, or MOV video files directly to VPS storage to begin 24/7 broadcasting.
             </p>
             <button
               onClick={() => fileInputRef.current?.click()}
@@ -342,14 +296,6 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
                   <span>{formatDuration(video.duration)}</span>
                   <span>{video.resolution || '1080p'} • {video.fps || 60}fps</span>
                 </div>
-
-                {/* Source Badge */}
-                {video.source === 'gdrive' && (
-                  <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-blue-600/90 text-[9px] font-bold text-white uppercase tracking-wider backdrop-blur-md flex items-center gap-1">
-                    <Cloud className="w-2.5 h-2.5" />
-                    Google Drive
-                  </div>
-                )}
               </div>
 
               {/* Info & Action Controls */}
@@ -401,12 +347,10 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
                     </button>
                   </div>
 
-                  {/* Direct Stream Button */}
                   <button
                     onClick={() => handleDirectStream(video)}
-                    className="px-3.5 py-1.5 rounded-xl bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border border-red-500/30 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                    className="px-3 py-1.5 rounded-xl bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border border-red-500/30 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
                   >
-                    <Radio className="w-3 h-3" />
                     <span>Stream</span>
                   </button>
                 </div>
@@ -417,137 +361,57 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
       )}
 
       {/* ========================================================= */}
-      {/* SAFE DELETE CONFIRMATION MODAL */}
+      {/* DELETE CONFIRMATION MODAL WITH ACTIVE CHECK */}
       {/* ========================================================= */}
       {deleteTargetVideo && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fadeIn">
-          <div className="relative w-full max-w-md bg-[#0e0e12] border border-red-500/50 rounded-3xl p-6 shadow-2xl space-y-4">
+          <div className="relative w-full max-w-md bg-[#0e0e12] border border-red-500/40 rounded-3xl p-6 shadow-2xl space-y-4">
             <div className="flex items-center gap-3 text-red-400">
-              <div className="p-2.5 rounded-2xl bg-red-950/80 border border-red-500/40 text-red-400">
+              <div className="p-3 rounded-2xl bg-red-950 border border-red-500/40">
                 <ShieldAlert className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-white">Delete Video from Storage</h3>
-                <p className="text-xs text-slate-400">Permanent VPS Disk Operation</p>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-black/50 border border-white/[0.08] space-y-1 text-xs">
-              <div className="font-semibold text-white truncate" title={deleteTargetVideo.originalName}>
-                {deleteTargetVideo.originalName}
-              </div>
-              <div className="text-slate-400 flex items-center gap-2 text-[11px]">
-                <span>Size: {formatSize(deleteTargetVideo.size)}</span>
-                <span>•</span>
-                <span>Duration: {formatDuration(deleteTargetVideo.duration)}</span>
+                <h3 className="text-base font-bold text-white">Confirm Video Deletion</h3>
+                <p className="text-xs text-slate-400">Permanent VPS storage removal</p>
               </div>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              Are you sure you want to permanently delete this video? The physical file and thumbnail will be wiped from VPS disk storage and removed from any playlists.
+              Are you sure you want to permanently delete <strong className="text-white font-mono">"{deleteTargetVideo.originalName}"</strong> from your VPS storage?
             </p>
+
+            <div className="p-3 rounded-xl bg-black/50 border border-white/[0.06] text-[11px] text-slate-400 space-y-1">
+              <div>Size: <span className="text-white">{formatSize(deleteTargetVideo.size)}</span></div>
+              <div>Duration: <span className="text-white">{formatDuration(deleteTargetVideo.duration)}</span></div>
+              <div>Resolution: <span className="text-white">{deleteTargetVideo.resolution || '1080p'}</span></div>
+            </div>
 
             <div className="pt-2 flex items-center justify-end gap-3">
               <button
-                type="button"
-                disabled={isDeleting}
                 onClick={() => setDeleteTargetVideo(null)}
-                className="px-4 py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/10 text-xs font-semibold text-slate-300 hover:text-white transition-all cursor-pointer disabled:opacity-50"
+                disabled={isDeleting}
+                className="px-4 py-2 rounded-xl bg-white/[0.05] text-xs font-semibold text-slate-300 hover:text-white cursor-pointer disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
-                type="button"
-                disabled={isDeleting}
                 onClick={handleConfirmDelete}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-xs font-bold text-white shadow-lg shadow-red-600/30 flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                disabled={isDeleting}
+                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-semibold text-white shadow-md shadow-red-600/30 flex items-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 {isDeleting ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     <span>Deleting...</span>
                   </>
                 ) : (
                   <>
-                    <Trash2 className="w-4 h-4" />
-                    <span>Yes, Delete Video</span>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Permanently</span>
                   </>
                 )}
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================= */}
-      {/* GOOGLE DRIVE IMPORT MODAL */}
-      {/* ========================================================= */}
-      {gdriveModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fadeIn">
-          <div className="relative w-full max-w-md bg-[#0e0e12] border border-red-500/40 rounded-3xl p-6 shadow-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-red-600/20 text-red-500">
-                  <Cloud className="w-5 h-5" />
-                </div>
-                <h3 className="text-base font-bold text-white">Import from Google Drive</h3>
-              </div>
-              <button
-                onClick={() => setGdriveModalOpen(false)}
-                className="text-slate-400 hover:text-white cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleGdriveSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Google Drive Public Share Link or File ID
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="https://drive.google.com/file/d/1aB2cD3e.../view"
-                  value={gdriveUrl}
-                  onChange={(e) => setGdriveUrl(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-black/60 border border-slate-700 focus:border-red-500 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Make sure the link sharing setting is set to <em>"Anyone with the link can view"</em>.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Video Title (Optional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g., Chill Lo-Fi Loop Part 1"
-                  value={gdriveTitle}
-                  onChange={(e) => setGdriveTitle(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-black/60 border border-slate-700 focus:border-red-500 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none"
-                />
-              </div>
-
-              <div className="pt-2 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setGdriveModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-white/[0.05] text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={gdriveImporting}
-                  className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-semibold text-white shadow-md shadow-red-600/30 transition-all disabled:opacity-50 cursor-pointer"
-                >
-                  {gdriveImporting ? 'Downloading to VPS...' : 'Import Video'}
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}
@@ -572,7 +436,7 @@ export const VideosPage: React.FC<VideosPageProps> = ({ onNavigate }) => {
 
             <div className="relative aspect-video w-full bg-black">
               <video
-                src={`/uploads/${previewVideo.filename}`}
+                src={`/api/videos/${previewVideo.id}/file`}
                 controls
                 autoPlay
                 className="w-full h-full object-contain"
